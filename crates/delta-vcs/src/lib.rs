@@ -5,5 +5,6 @@
 
 pub mod hosting;
 pub mod protocol;
+pub mod refs;
 
 pub use hosting::RepoHost;

@@ -2,30 +2,33 @@
 
 Delta is a code hosting platform providing version control, CI/CD, and artifact registry — built for the AGNOS ecosystem. Designed to be clean, private, and natively accessible to both humans and AI agents.
 
-## Phase 1 — Foundation (Current)
+## Phase 1 — Foundation (Complete)
 
 Core infrastructure, project scaffold, and basic repo hosting.
 
 - [x] Project scaffold (Rust workspace, crate structure)
 - [x] Core types and configuration (`delta-core`)
-- [ ] Database schema and migrations (SQLite + Postgres)
-- [ ] User and authentication system (token-based, SSH keys)
-- [ ] Agent identity and API key management
-- [ ] Repository CRUD via REST API
-- [ ] Bare git repository initialization and storage
-- [ ] Health check and status endpoints
-- [ ] Configuration file loading (TOML)
-- [ ] Structured logging and tracing
+- [x] Database schema and migrations (SQLite)
+- [x] User and authentication system (argon2 passwords, BLAKE3 tokens)
+- [x] Agent identity and API key management (scoped tokens, is_agent flag)
+- [x] Repository CRUD via REST API
+- [x] Bare git repository initialization and storage
+- [x] Health check and status endpoints
+- [x] Configuration file loading (TOML)
+- [x] Structured logging and tracing
 
-## Phase 2 — Git Protocol
+## Phase 2 — Git Protocol (Complete)
 
-Full git push/pull support over HTTP and SSH.
+Full git push/pull support over HTTP.
 
-- [ ] Smart HTTP transport (info/refs, upload-pack, receive-pack)
+- [x] Smart HTTP transport (info/refs, upload-pack, receive-pack)
+- [x] Ref advertisement and negotiation
+- [x] Push authorization (Basic auth with API tokens)
+- [x] Branch protection rules (pattern matching, PR requirement, force push prevention)
+- [x] Webhook dispatch on push events (async delivery with recording)
+- [x] Branch and tag listing via API (gix)
+- [x] Webhook CRUD API (create, list, delete per repo)
 - [ ] SSH transport via built-in SSH server
-- [ ] Ref advertisement and negotiation
-- [ ] Push authorization and branch protection rules
-- [ ] Webhook dispatch on push/tag events
 - [ ] Large file support (LFS-compatible)
 - [ ] Shallow clone and partial clone support
 - [ ] Repository forking and mirroring

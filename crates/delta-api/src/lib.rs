@@ -1,7 +1,4 @@
-//! Delta API server.
-//!
-//! Provides REST endpoints for repository management, CI/CD pipelines,
-//! artifact registry, and user/agent management.
-
+pub mod auth;
+pub mod extractors;
 pub mod routes;
 pub mod state;

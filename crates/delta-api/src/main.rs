@@ -1,6 +1,6 @@
 use clap::Parser;
 use delta_api::{routes, state::AppState};
-use delta_core::DeltaConfig;
+use delta_core::{DeltaConfig, db};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -35,7 +35,8 @@ async fn main() -> anyhow::Result<()> {
         config.server.port = port;
     }
 
-    let state = AppState::new(config.clone());
+    let pool = db::init_pool(&config.storage.db_url).await?;
+    let state = AppState::new(config.clone(), pool);
     let app = routes::router(state);
 
     let addr = format!("{}:{}", config.server.host, config.server.port);
