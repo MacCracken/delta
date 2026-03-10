@@ -5,6 +5,8 @@ use std::path::Path;
 use std::process::Stdio;
 use tokio::process::Command;
 
+use crate::validate::validate_ref;
+
 /// Execute a merge in a bare repository using a temporary worktree.
 /// Returns the resulting merge commit SHA.
 pub async fn execute_merge(
@@ -16,10 +18,14 @@ pub async fn execute_merge(
     author_name: &str,
     author_email: &str,
 ) -> Result<String> {
+    validate_ref(base_branch)?;
+    validate_ref(head_branch)?;
+
     let tmp_dir = tempfile::tempdir()
         .map_err(|e| DeltaError::Storage(format!("failed to create temp dir: {}", e)))?;
     let worktree_path = tmp_dir.path().join("merge-worktree");
-    let worktree_str = worktree_path.to_str().unwrap();
+    let worktree_str = worktree_path.to_str()
+        .ok_or_else(|| DeltaError::Storage("worktree path is not valid UTF-8".into()))?;
 
     // Add worktree at the base branch
     run_git(repo_path, &["worktree", "add", worktree_str, base_branch]).await?;

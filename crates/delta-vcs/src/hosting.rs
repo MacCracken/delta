@@ -1,6 +1,8 @@
 use delta_core::{DeltaError, Result};
 use std::path::PathBuf;
 
+use crate::validate::validate_name;
+
 /// Manages bare git repositories on disk.
 pub struct RepoHost {
     repos_dir: PathBuf,
@@ -14,13 +16,16 @@ impl RepoHost {
     }
 
     /// Returns the on-disk path for a repository.
-    pub fn repo_path(&self, owner: &str, name: &str) -> PathBuf {
-        self.repos_dir.join(owner).join(format!("{}.git", name))
+    /// Validates inputs to prevent path traversal.
+    pub fn repo_path(&self, owner: &str, name: &str) -> Result<PathBuf> {
+        validate_name(owner)?;
+        validate_name(name)?;
+        Ok(self.repos_dir.join(owner).join(format!("{}.git", name)))
     }
 
     /// Initialize a new bare repository.
     pub fn init_bare(&self, owner: &str, name: &str) -> Result<PathBuf> {
-        let path = self.repo_path(owner, name);
+        let path = self.repo_path(owner, name)?;
         if path.exists() {
             return Err(DeltaError::Conflict(format!(
                 "repository {}/{} already exists",
@@ -35,12 +40,12 @@ impl RepoHost {
 
     /// Check if a repository exists on disk.
     pub fn exists(&self, owner: &str, name: &str) -> bool {
-        self.repo_path(owner, name).exists()
+        self.repo_path(owner, name).map(|p| p.exists()).unwrap_or(false)
     }
 
     /// Delete a repository from disk.
     pub fn delete(&self, owner: &str, name: &str) -> Result<()> {
-        let path = self.repo_path(owner, name);
+        let path = self.repo_path(owner, name)?;
         if !path.exists() {
             return Err(DeltaError::RepoNotFound(format!("{}/{}", owner, name)));
         }

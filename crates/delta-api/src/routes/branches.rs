@@ -27,7 +27,8 @@ async fn list_branches(
     State(state): State<AppState>,
     Path((owner, name)): Path<(String, String)>,
 ) -> Result<Json<Vec<delta_vcs::refs::BranchInfo>>, (StatusCode, String)> {
-    let repo_path = state.repo_host.repo_path(&owner, &name);
+    let repo_path = state.repo_host.repo_path(&owner, &name)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     if !repo_path.exists() {
         return Err((StatusCode::NOT_FOUND, "repository not found".into()));
     }
@@ -42,7 +43,8 @@ async fn list_tags(
     State(state): State<AppState>,
     Path((owner, name)): Path<(String, String)>,
 ) -> Result<Json<Vec<delta_vcs::refs::TagInfo>>, (StatusCode, String)> {
-    let repo_path = state.repo_host.repo_path(&owner, &name);
+    let repo_path = state.repo_host.repo_path(&owner, &name)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     if !repo_path.exists() {
         return Err((StatusCode::NOT_FOUND, "repository not found".into()));
     }

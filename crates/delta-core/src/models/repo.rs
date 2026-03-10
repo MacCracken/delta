@@ -22,6 +22,16 @@ pub enum Visibility {
     Internal,
 }
 
+impl Visibility {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Private => "private",
+            Self::Internal => "internal",
+        }
+    }
+}
+
 impl Repository {
     pub fn new(owner: impl Into<String>, name: impl Into<String>) -> Self {
         let now = Utc::now();

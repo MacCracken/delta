@@ -8,5 +8,6 @@ pub mod hosting;
 pub mod merge;
 pub mod protocol;
 pub mod refs;
+mod validate;
 
 pub use hosting::RepoHost;

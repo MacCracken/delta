@@ -6,24 +6,32 @@ use uuid::Uuid;
 
 // --- Pull Requests ---
 
-/// Allocate the next PR number for a repo (atomic).
+/// Allocate the next PR number for a repo (atomic via transaction).
 async fn next_pr_number(pool: &SqlitePool, repo_id: &str) -> Result<i64> {
-    // Upsert the counter
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| DeltaError::Storage(e.to_string()))?;
+
     sqlx::query(
         "INSERT INTO pr_counters (repo_id, next_number) VALUES (?, 1)
          ON CONFLICT(repo_id) DO UPDATE SET next_number = next_number + 1",
     )
     .bind(repo_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(|e| DeltaError::Storage(e.to_string()))?;
 
     let row: (i64,) =
         sqlx::query_as("SELECT next_number FROM pr_counters WHERE repo_id = ?")
             .bind(repo_id)
-            .fetch_one(pool)
+            .fetch_one(&mut *tx)
             .await
             .map_err(|e| DeltaError::Storage(e.to_string()))?;
+
+    tx.commit()
+        .await
+        .map_err(|e| DeltaError::Storage(e.to_string()))?;
 
     Ok(row.0)
 }
@@ -97,7 +105,7 @@ pub async fn list_for_repo(
 ) -> Result<Vec<PullRequest>> {
     let rows = if let Some(state) = state_filter {
         sqlx::query_as::<_, PrRow>(
-            "SELECT * FROM pull_requests WHERE repo_id = ? AND state = ? ORDER BY number DESC",
+            "SELECT * FROM pull_requests WHERE repo_id = ? AND state = ? ORDER BY number DESC LIMIT 100",
         )
         .bind(repo_id)
         .bind(state)
@@ -105,7 +113,7 @@ pub async fn list_for_repo(
         .await
     } else {
         sqlx::query_as::<_, PrRow>(
-            "SELECT * FROM pull_requests WHERE repo_id = ? ORDER BY number DESC",
+            "SELECT * FROM pull_requests WHERE repo_id = ? ORDER BY number DESC LIMIT 100",
         )
         .bind(repo_id)
         .fetch_all(pool)
@@ -282,11 +290,7 @@ pub async fn submit_review(
 ) -> Result<PrReview> {
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
-    let state_str = serde_json::to_value(state)
-        .unwrap()
-        .as_str()
-        .unwrap()
-        .to_string();
+    let state_str = state.as_str().to_string();
 
     sqlx::query(
         "INSERT INTO pr_reviews (id, pr_id, reviewer_id, state, body, created_at)

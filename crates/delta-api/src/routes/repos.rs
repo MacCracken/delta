@@ -38,11 +38,7 @@ impl RepoResponse {
             owner: owner_name.to_string(),
             name: repo.name,
             description: repo.description,
-            visibility: serde_json::to_value(repo.visibility)
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .to_string(),
+            visibility: repo.visibility.as_str().to_string(),
             default_branch: repo.default_branch,
             created_at: repo.created_at.to_rfc3339(),
             updated_at: repo.updated_at.to_rfc3339(),
@@ -90,6 +86,14 @@ async fn create_repo(
     AuthUser(user): AuthUser,
     Json(req): Json<CreateRepoRequest>,
 ) -> Result<(StatusCode, Json<RepoResponse>), (StatusCode, String)> {
+    if req.name.is_empty()
+        || req.name.len() > 100
+        || req.name.starts_with('-')
+        || req.name.starts_with('.')
+        || !req.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return Err((StatusCode::BAD_REQUEST, "invalid repository name".into()));
+    }
     let visibility = match req.visibility.as_str() {
         "public" => Visibility::Public,
         "internal" => Visibility::Internal,

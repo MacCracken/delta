@@ -22,16 +22,17 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
 }
 
 /// Generate a random API token. Returns (raw_token, hash).
-pub fn generate_token() -> (String, String) {
+pub fn generate_token() -> Result<(String, String)> {
     use base64::Engine;
     let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes).expect("failed to generate random bytes");
+    getrandom::fill(&mut bytes)
+        .map_err(|e| DeltaError::Storage(format!("RNG failure: {}", e)))?;
     let raw = format!(
         "delta_{}",
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes),
     );
     let hash = blake3::hash(raw.as_bytes()).to_hex().to_string();
-    (raw, hash)
+    Ok((raw, hash))
 }
 
 /// Hash a raw token for lookup.
@@ -59,11 +60,21 @@ pub async fn register(
     db::user::create(pool, username, email, &pw_hash, is_agent).await
 }
 
+/// Compute token expiry timestamp from config.
+pub fn compute_expiry(expiry_secs: u64) -> Option<String> {
+    if expiry_secs == 0 {
+        return None;
+    }
+    let expires = chrono::Utc::now() + chrono::Duration::seconds(expiry_secs as i64);
+    Some(expires.to_rfc3339())
+}
+
 /// Login with username/password. Returns (user, raw_token).
 pub async fn login(
     pool: &SqlitePool,
     username: &str,
     password: &str,
+    token_expiry_secs: u64,
 ) -> Result<(User, String)> {
     let (user_id, pw_hash) = db::user::get_password_hash(pool, username).await?;
 
@@ -71,8 +82,9 @@ pub async fn login(
         return Err(DeltaError::AuthFailed("invalid credentials".into()));
     }
 
-    let (raw_token, token_hash) = generate_token();
-    db::user::create_token(pool, &user_id, "login", &token_hash, "*", None).await?;
+    let (raw_token, token_hash) = generate_token()?;
+    let expires_at = compute_expiry(token_expiry_secs);
+    db::user::create_token(pool, &user_id, "login", &token_hash, "*", expires_at.as_deref()).await?;
 
     let user = db::user::get_by_id(pool, &user_id).await?;
     Ok((user, raw_token))

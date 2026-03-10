@@ -5,8 +5,12 @@ use std::path::Path;
 use std::process::Stdio;
 use tokio::process::Command;
 
+use crate::validate::validate_ref;
+
 /// Generate a unified diff between two refs (branches, commits, tags).
 pub async fn diff_refs(repo_path: &Path, base: &str, head: &str) -> Result<String> {
+    validate_ref(base)?;
+    validate_ref(head)?;
     let output = Command::new("git")
         .args(["diff", &format!("{}...{}", base, head)])
         .current_dir(repo_path)
@@ -26,6 +30,8 @@ pub async fn diff_refs(repo_path: &Path, base: &str, head: &str) -> Result<Strin
 
 /// Get a stat summary (files changed, insertions, deletions).
 pub async fn diff_stat(repo_path: &Path, base: &str, head: &str) -> Result<DiffStat> {
+    validate_ref(base)?;
+    validate_ref(head)?;
     let output = Command::new("git")
         .args(["diff", "--stat", "--numstat", &format!("{}...{}", base, head)])
         .current_dir(repo_path)
@@ -71,6 +77,8 @@ pub async fn diff_stat(repo_path: &Path, base: &str, head: &str) -> Result<DiffS
 
 /// List commits between base and head.
 pub async fn list_commits(repo_path: &Path, base: &str, head: &str) -> Result<Vec<CommitInfo>> {
+    validate_ref(base)?;
+    validate_ref(head)?;
     let output = Command::new("git")
         .args([
             "log",
@@ -110,6 +118,8 @@ pub async fn list_commits(repo_path: &Path, base: &str, head: &str) -> Result<Ve
 
 /// Check if a merge would have conflicts.
 pub async fn check_mergeable(repo_path: &Path, base: &str, head: &str) -> Result<bool> {
+    validate_ref(base)?;
+    validate_ref(head)?;
     let output = Command::new("git")
         .args(["merge-base", base, head])
         .current_dir(repo_path)

@@ -8,3 +8,4 @@ pub mod artifact;
 pub mod store;
 
 pub use artifact::Artifact;
+pub use store::BlobStore;

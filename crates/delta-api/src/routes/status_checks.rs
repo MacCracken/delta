@@ -49,21 +49,14 @@ async fn list_statuses(
     Ok(Json(
         checks
             .into_iter()
-            .map(|c| {
-                let state_str = serde_json::to_value(c.state)
-                    .unwrap()
-                    .as_str()
-                    .unwrap()
-                    .to_string();
-                StatusResponse {
-                    id: c.id.to_string(),
-                    context: c.context,
-                    state: state_str,
-                    description: c.description,
-                    target_url: c.target_url,
-                    created_at: c.created_at.to_rfc3339(),
-                    updated_at: c.updated_at.to_rfc3339(),
-                }
+            .map(|c| StatusResponse {
+                id: c.id.to_string(),
+                context: c.context,
+                state: c.state.as_str().to_string(),
+                description: c.description,
+                target_url: c.target_url,
+                created_at: c.created_at.to_rfc3339(),
+                updated_at: c.updated_at.to_rfc3339(),
             })
             .collect(),
     ))
@@ -110,18 +103,12 @@ async fn create_status(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let state_str = serde_json::to_value(check.state)
-        .unwrap()
-        .as_str()
-        .unwrap()
-        .to_string();
-
     Ok((
         StatusCode::CREATED,
         Json(StatusResponse {
             id: check.id.to_string(),
             context: check.context,
-            state: state_str,
+            state: check.state.as_str().to_string(),
             description: check.description,
             target_url: check.target_url,
             created_at: check.created_at.to_rfc3339(),

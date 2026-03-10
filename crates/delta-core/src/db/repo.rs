@@ -14,11 +14,7 @@ pub async fn create(
 ) -> Result<Repository> {
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
-    let vis = serde_json::to_value(visibility)
-        .unwrap()
-        .as_str()
-        .unwrap()
-        .to_string();
+    let vis = visibility.as_str().to_string();
 
     sqlx::query(
         "INSERT INTO repositories (id, owner_id, name, description, visibility, default_branch, created_at, updated_at)
@@ -133,11 +129,7 @@ pub async fn update(
     }
 
     if let Some(vis) = visibility {
-        let vis_str = serde_json::to_value(vis)
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .to_string();
+        let vis_str = vis.as_str().to_string();
         sqlx::query("UPDATE repositories SET visibility = ?, updated_at = ? WHERE id = ?")
             .bind(&vis_str)
             .bind(&now)

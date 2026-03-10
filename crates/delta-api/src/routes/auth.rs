@@ -39,12 +39,25 @@ async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<AuthResponse>), (StatusCode, String)> {
+    // Validate username: 1-39 chars, alphanumeric and hyphens, no leading hyphen
+    if req.username.is_empty()
+        || req.username.len() > 39
+        || req.username.starts_with('-')
+        || !req.username.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err((StatusCode::BAD_REQUEST, "username must be 1-39 alphanumeric characters or hyphens, not starting with '-'".into()));
+    }
+    if req.password.len() < 8 {
+        return Err((StatusCode::BAD_REQUEST, "password must be at least 8 characters".into()));
+    }
     let user = auth::register(&state.db, &req.username, &req.email, &req.password, req.is_agent)
         .await
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
 
-    let (raw_token, token_hash) = auth::generate_token();
-    delta_core::db::user::create_token(&state.db, &user.id.to_string(), "initial", &token_hash, "*", None)
+    let (raw_token, token_hash) = auth::generate_token()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let expires_at = auth::compute_expiry(state.config.auth.token_expiry_secs);
+    delta_core::db::user::create_token(&state.db, &user.id.to_string(), "initial", &token_hash, "*", expires_at.as_deref())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -72,7 +85,7 @@ async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>, (StatusCode, String)> {
-    let (user, token) = auth::login(&state.db, &req.username, &req.password)
+    let (user, token) = auth::login(&state.db, &req.username, &req.password, state.config.auth.token_expiry_secs)
         .await
         .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
 
@@ -109,14 +122,16 @@ async fn create_token(
     AuthUser(user): AuthUser,
     Json(req): Json<CreateTokenRequest>,
 ) -> Result<(StatusCode, Json<TokenResponse>), (StatusCode, String)> {
-    let (raw_token, token_hash) = auth::generate_token();
+    let (raw_token, token_hash) = auth::generate_token()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let expires_at = auth::compute_expiry(state.config.auth.token_expiry_secs);
     let id = delta_core::db::user::create_token(
         &state.db,
         &user.id.to_string(),
         &req.name,
         &token_hash,
         &req.scopes,
-        None,
+        expires_at.as_deref(),
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

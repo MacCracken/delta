@@ -9,6 +9,7 @@ use delta_core::models::pull_request::*;
 use serde::{Deserialize, Serialize};
 
 use crate::extractors::AuthUser;
+use crate::helpers::resolve_repo;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -71,18 +72,10 @@ impl PrResponse {
             None
         };
 
-        let state_str = serde_json::to_value(pr.state)
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .to_string();
+        let state_str = pr.state.as_str().to_string();
 
         let strategy_str = pr.merge_strategy.map(|s| {
-            serde_json::to_value(s)
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .to_string()
+            s.as_str().to_string()
         });
 
         PrResponse {
@@ -125,23 +118,6 @@ struct ReviewResponse {
     state: String,
     body: Option<String>,
     created_at: String,
-}
-
-// --- Helpers ---
-
-async fn resolve_repo(
-    state: &AppState,
-    owner: &str,
-    name: &str,
-) -> std::result::Result<(delta_core::models::repo::Repository, delta_core::models::user::User), (StatusCode, String)> {
-    let owner_user = db::user::get_by_username(&state.db, owner)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, format!("user '{}' not found", owner)))?;
-    let owner_id = owner_user.id.to_string();
-    let repo = db::repo::get_by_owner_and_name(&state.db, &owner_id, name)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, format!("repository '{}/{}' not found", owner, name)))?;
-    Ok((repo, owner_user))
 }
 
 // --- Handlers ---
@@ -191,7 +167,8 @@ async fn create_pull(
     let user_id = user.id.to_string();
 
     // Get head SHA if possible
-    let repo_path = state.repo_host.repo_path(&owner, &name);
+    let repo_path = state.repo_host.repo_path(&owner, &name)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     let head_sha = delta_vcs::refs::list_branches(&repo_path)
         .ok()
         .and_then(|branches| {
@@ -340,7 +317,8 @@ async fn merge_pull(
     }
 
     // Execute the merge
-    let repo_path = state.repo_host.repo_path(&owner, &name);
+    let repo_path = state.repo_host.repo_path(&owner, &name)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     let merge_mode = match req.strategy.as_str() {
         "squash" => delta_vcs::merge::MergeMode::Squash,
         "rebase" => delta_vcs::merge::MergeMode::Rebase,
@@ -436,7 +414,8 @@ async fn get_diff(
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
 
-    let repo_path = state.repo_host.repo_path(&owner, &name);
+    let repo_path = state.repo_host.repo_path(&owner, &name)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     let diff = delta_vcs::diff::diff_refs(&repo_path, &pr.base_branch, &pr.head_branch)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -459,7 +438,8 @@ async fn get_commits(
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
 
-    let repo_path = state.repo_host.repo_path(&owner, &name);
+    let repo_path = state.repo_host.repo_path(&owner, &name)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     let commits = delta_vcs::diff::list_commits(&repo_path, &pr.base_branch, &pr.head_branch)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -575,15 +555,10 @@ async fn list_reviews(
             .await
             .map(|u| u.username)
             .unwrap_or_else(|_| r.reviewer_id.to_string());
-        let state_str = serde_json::to_value(r.state)
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .to_string();
         responses.push(ReviewResponse {
             id: r.id.to_string(),
             reviewer,
-            state: state_str,
+            state: r.state.as_str().to_string(),
             body: r.body,
             created_at: r.created_at.to_rfc3339(),
         });
@@ -631,18 +606,12 @@ async fn submit_review(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let state_str = serde_json::to_value(review.state)
-        .unwrap()
-        .as_str()
-        .unwrap()
-        .to_string();
-
     Ok((
         StatusCode::CREATED,
         Json(ReviewResponse {
             id: review.id.to_string(),
             reviewer: user.username,
-            state: state_str,
+            state: review.state.as_str().to_string(),
             body: review.body,
             created_at: review.created_at.to_rfc3339(),
         }),

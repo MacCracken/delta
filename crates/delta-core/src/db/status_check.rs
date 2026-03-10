@@ -15,47 +15,31 @@ pub async fn upsert(
     target_url: Option<&str>,
 ) -> Result<StatusCheck> {
     let now = Utc::now().to_rfc3339();
-    let state_str = serde_json::to_value(state)
-        .unwrap()
-        .as_str()
-        .unwrap()
-        .to_string();
+    let state_str = state.as_str();
+    let id = Uuid::new_v4().to_string();
 
-    // Try update first
-    let result = sqlx::query(
-        "UPDATE status_checks SET state = ?, description = ?, target_url = ?, updated_at = ?
-         WHERE repo_id = ? AND commit_sha = ? AND context = ?",
+    // Atomic upsert via INSERT ON CONFLICT
+    sqlx::query(
+        "INSERT INTO status_checks (id, repo_id, commit_sha, context, state, description, target_url, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(repo_id, commit_sha, context) DO UPDATE SET
+           state = excluded.state,
+           description = excluded.description,
+           target_url = excluded.target_url,
+           updated_at = excluded.updated_at",
     )
-    .bind(&state_str)
-    .bind(description)
-    .bind(target_url)
-    .bind(&now)
+    .bind(&id)
     .bind(repo_id)
     .bind(commit_sha)
     .bind(context)
+    .bind(state_str)
+    .bind(description)
+    .bind(target_url)
+    .bind(&now)
+    .bind(&now)
     .execute(pool)
     .await
     .map_err(|e| DeltaError::Storage(e.to_string()))?;
-
-    if result.rows_affected() == 0 {
-        let id = Uuid::new_v4().to_string();
-        sqlx::query(
-            "INSERT INTO status_checks (id, repo_id, commit_sha, context, state, description, target_url, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&id)
-        .bind(repo_id)
-        .bind(commit_sha)
-        .bind(context)
-        .bind(&state_str)
-        .bind(description)
-        .bind(target_url)
-        .bind(&now)
-        .bind(&now)
-        .execute(pool)
-        .await
-        .map_err(|e| DeltaError::Storage(e.to_string()))?;
-    }
 
     get_for_commit(pool, repo_id, commit_sha)
         .await?

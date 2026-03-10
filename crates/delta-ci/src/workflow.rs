@@ -31,5 +31,6 @@ pub struct Step {
     pub name: Option<String>,
     pub run: Option<String>,
     pub uses: Option<String>,
+    #[serde(default)]
     pub with: HashMap<String, String>,
 }

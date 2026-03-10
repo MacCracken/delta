@@ -40,7 +40,8 @@ async fn info_refs(
     headers: HeaderMap,
 ) -> Result<Response, (StatusCode, String)> {
     // Check repo exists
-    let repo_path = state.repo_host.repo_path(&owner, &name);
+    let repo_path = state.repo_host.repo_path(&owner, &name)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     if !repo_path.exists() {
         return Err((StatusCode::NOT_FOUND, "repository not found".into()));
     }
@@ -77,7 +78,8 @@ async fn upload_pack(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, (StatusCode, String)> {
-    let repo_path = state.repo_host.repo_path(&owner, &name);
+    let repo_path = state.repo_host.repo_path(&owner, &name)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     if !repo_path.exists() {
         return Err((StatusCode::NOT_FOUND, "repository not found".into()));
     }
@@ -105,7 +107,8 @@ async fn receive_pack(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, (StatusCode, String)> {
-    let repo_path = state.repo_host.repo_path(&owner, &name);
+    let repo_path = state.repo_host.repo_path(&owner, &name)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     if !repo_path.exists() {
         return Err((StatusCode::NOT_FOUND, "repository not found".into()));
     }
@@ -239,12 +242,37 @@ async fn dispatch_push_webhooks(
     });
     let payload_str = serde_json::to_string(&payload)?;
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap_or_default();
+
     for webhook in webhooks {
-        let resp = client
+        // Validate webhook URL: must be HTTP(S), reject private IPs
+        if !webhook.url.starts_with("https://") && !webhook.url.starts_with("http://") {
+            tracing::warn!(webhook_id = %webhook.id, "skipping webhook with non-HTTP URL");
+            continue;
+        }
+
+        // Compute HMAC signature if webhook has a secret
+        let signature = webhook.secret.as_deref().map(|secret| {
+            use blake3::Hasher;
+            let mut hasher = Hasher::new_keyed(&blake3::hash(secret.as_bytes()).as_bytes().clone());
+            hasher.update(payload_str.as_bytes());
+            hasher.finalize().to_hex().to_string()
+        });
+
+        let mut req_builder = client
             .post(&webhook.url)
             .header("Content-Type", "application/json")
-            .header("X-Delta-Event", "push")
+            .header("X-Delta-Event", "push");
+
+        if let Some(sig) = &signature {
+            req_builder = req_builder.header("X-Delta-Signature", sig.as_str());
+        }
+
+        let resp = req_builder
             .body(payload_str.clone())
             .send()
             .await;

@@ -31,12 +31,32 @@ pub enum PrState {
     Merged,
 }
 
+impl PrState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Closed => "closed",
+            Self::Merged => "merged",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MergeStrategy {
     Merge,
     Squash,
     Rebase,
+}
+
+impl MergeStrategy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Merge => "merge",
+            Self::Squash => "squash",
+            Self::Rebase => "rebase",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +93,16 @@ pub enum ReviewState {
     Commented,
 }
 
+impl ReviewState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Approved => "approved",
+            Self::ChangesRequested => "changes_requested",
+            Self::Commented => "commented",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusCheck {
     pub id: Uuid,
@@ -93,4 +123,15 @@ pub enum CheckState {
     Success,
     Failure,
     Error,
+}
+
+impl CheckState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Success => "success",
+            Self::Failure => "failure",
+            Self::Error => "error",
+        }
+    }
 }
