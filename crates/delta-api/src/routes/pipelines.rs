@@ -67,7 +67,13 @@ async fn list_pipelines(
         limit,
     )
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("failed to list pipelines: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal server error".into(),
+        )
+    })?;
     Ok(Json(runs))
 }
 
@@ -102,7 +108,13 @@ async fn trigger_pipeline(
         &req.commit_sha,
     )
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("failed to create pipeline: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal server error".into(),
+        )
+    })?;
     Ok((StatusCode::CREATED, Json(run)))
 }
 
@@ -142,7 +154,13 @@ async fn cancel_pipeline(
         db::pipeline::RunStatus::Cancelled,
     )
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("failed to cancel pipeline: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal server error".into(),
+        )
+    })?;
     Ok(Json(run))
 }
 
@@ -160,7 +178,13 @@ async fn list_jobs(
     }
     let jobs = db::pipeline::list_jobs(&state.db, &pipeline_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("failed to list jobs: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
     Ok(Json(jobs))
 }
 
@@ -178,7 +202,13 @@ async fn get_job_logs(
     }
     let logs = db::pipeline::get_step_logs(&state.db, &job_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("failed to get step logs: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
     Ok(Json(logs))
 }
 
@@ -195,7 +225,13 @@ async fn list_secrets(
     }
     let secrets = db::secret::list(&state.db, &repo.id.to_string())
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("failed to list secrets: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
     Ok(Json(
         secrets
             .into_iter()
@@ -227,6 +263,26 @@ async fn set_secret(
     AuthUser(user): AuthUser,
     Json(req): Json<SetSecretRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    // Validate secret name: 1-256 chars, alphanumeric/underscores/hyphens
+    if req.name.is_empty()
+        || req.name.len() > 256
+        || !req
+            .name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "secret name must be 1-256 alphanumeric characters, underscores, or hyphens".into(),
+        ));
+    }
+    if req.value.is_empty() || req.value.len() > 65536 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "secret value must be 1-65536 characters".into(),
+        ));
+    }
+
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     if user.id != owner_user.id {
         return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
@@ -235,7 +291,13 @@ async fn set_secret(
     let encrypted = delta_core::crypto::encrypt(&encryption_key, req.value.as_bytes());
     db::secret::set(&state.db, &repo.id.to_string(), &req.name, &encrypted)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("failed to set secret: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
     Ok(StatusCode::NO_CONTENT)
 }
 

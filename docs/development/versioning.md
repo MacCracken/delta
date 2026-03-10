@@ -8,6 +8,9 @@ Delta follows the AGNOS calendar versioning (CalVer) convention.
 - **Same-day patch**: `YYYY.M.D-N` (e.g. `2026.3.10-1`)
 - **Build number**: `YYYYMMDDN` (e.g. `20260310`, `202603101`)
 
+**No `v` prefix.** Tags, release names, and package labels use the bare version
+number (e.g. `2026.3.10`, not `v2026.3.10`).
+
 The source version is stored in `VERSION` (root) and `Cargo.toml` workspace version.
 The build number is derived automatically during release — no parentheses or special
 characters in filenames.

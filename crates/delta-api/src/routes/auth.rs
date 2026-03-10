@@ -70,8 +70,13 @@ async fn register(
     .await
     .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
 
-    let (raw_token, token_hash) =
-        auth::generate_token().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let (raw_token, token_hash) = auth::generate_token().map_err(|e| {
+        tracing::error!("internal error: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal server error".into(),
+        )
+    })?;
     let expires_at = auth::compute_expiry(state.config.auth.token_expiry_secs);
     delta_core::db::user::create_token(
         &state.db,
@@ -82,7 +87,13 @@ async fn register(
         expires_at.as_deref(),
     )
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("internal error: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal server error".into(),
+        )
+    })?;
 
     Ok((
         StatusCode::CREATED,
@@ -150,8 +161,13 @@ async fn create_token(
     AuthUser(user): AuthUser,
     Json(req): Json<CreateTokenRequest>,
 ) -> Result<(StatusCode, Json<TokenResponse>), (StatusCode, String)> {
-    let (raw_token, token_hash) =
-        auth::generate_token().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let (raw_token, token_hash) = auth::generate_token().map_err(|e| {
+        tracing::error!("internal error: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal server error".into(),
+        )
+    })?;
     let expires_at = auth::compute_expiry(state.config.auth.token_expiry_secs);
     let id = delta_core::db::user::create_token(
         &state.db,
@@ -162,7 +178,13 @@ async fn create_token(
         expires_at.as_deref(),
     )
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("internal error: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal server error".into(),
+        )
+    })?;
 
     Ok((
         StatusCode::CREATED,

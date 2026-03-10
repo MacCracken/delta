@@ -115,7 +115,13 @@ async fn create_status(
         req.target_url.as_deref(),
     )
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("failed to upsert status check: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal server error".into(),
+        )
+    })?;
 
     Ok((
         StatusCode::CREATED,

@@ -68,7 +68,7 @@ fn test_branch_protection_glob_matching() {
         prevent_deletion: true,
     };
 
-    assert!(p.matches("release/v1.0"));
+    assert!(p.matches("release/2026.1.1"));
     assert!(p.matches("release/2026.3"));
     assert!(!p.matches("release"));
     assert!(!p.matches("main"));

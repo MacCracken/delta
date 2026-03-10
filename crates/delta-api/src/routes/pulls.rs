@@ -145,7 +145,13 @@ async fn list_pulls(
 
     let prs = db::pull_request::list_for_repo(&state.db, &repo_id, query.state.as_deref())
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("failed to list pull requests: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
 
     let mut responses = Vec::new();
     for pr in prs {
@@ -170,6 +176,28 @@ async fn create_pull(
     AuthUser(user): AuthUser,
     Json(req): Json<CreatePrRequest>,
 ) -> Result<(StatusCode, Json<PrResponse>), (StatusCode, String)> {
+    // Validate input lengths
+    if req.title.is_empty() || req.title.len() > 256 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "title must be 1-256 characters".into(),
+        ));
+    }
+    if let Some(body) = &req.body
+        && body.len() > 65536
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "body must be at most 65536 characters".into(),
+        ));
+    }
+    if req.head_branch.is_empty() || req.head_branch.len() > 256 {
+        return Err((StatusCode::BAD_REQUEST, "invalid head branch name".into()));
+    }
+    if req.base_branch.is_empty() || req.base_branch.len() > 256 {
+        return Err((StatusCode::BAD_REQUEST, "invalid base branch name".into()));
+    }
+
     let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let repo_id = repo.id.to_string();
     let user_id = user.id.to_string();
@@ -202,7 +230,13 @@ async fn create_pull(
         },
     )
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("failed to create pull request: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal server error".into(),
+        )
+    })?;
 
     Ok((
         StatusCode::CREATED,
@@ -256,7 +290,13 @@ async fn update_pull(
         req.body.as_deref(),
     )
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("failed to update pull request: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal server error".into(),
+        )
+    })?;
 
     Ok(Json(PrResponse::from_pr(updated, &state.db).await))
 }
@@ -371,7 +411,13 @@ async fn merge_pull(
         &req.strategy,
     )
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("failed to mark PR as merged: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal server error".into(),
+        )
+    })?;
 
     Ok(Json(PrResponse::from_pr(merged, &state.db).await))
 }
@@ -394,7 +440,13 @@ async fn close_pull(
 
     let closed = db::pull_request::close(&state.db, &pr.id.to_string())
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("failed to close pull request: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
 
     Ok(Json(PrResponse::from_pr(closed, &state.db).await))
 }
@@ -417,7 +469,13 @@ async fn reopen_pull(
 
     let reopened = db::pull_request::reopen(&state.db, &pr.id.to_string())
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("failed to reopen pull request: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
 
     Ok(Json(PrResponse::from_pr(reopened, &state.db).await))
 }
@@ -495,7 +553,13 @@ async fn list_comments(
 
     let comments = db::pull_request::list_comments(&state.db, &pr.id.to_string())
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("failed to list comments: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
 
     let mut responses = Vec::new();
     for c in comments {
@@ -531,6 +595,13 @@ async fn create_comment(
     AuthUser(user): AuthUser,
     Json(req): Json<CreateCommentRequest>,
 ) -> Result<(StatusCode, Json<CommentResponse>), (StatusCode, String)> {
+    if req.body.is_empty() || req.body.len() > 65536 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "comment body must be 1-65536 characters".into(),
+        ));
+    }
+
     let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let repo_id = repo.id.to_string();
 
@@ -548,7 +619,13 @@ async fn create_comment(
         req.side.as_deref(),
     )
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("failed to add comment: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal server error".into(),
+        )
+    })?;
 
     Ok((
         StatusCode::CREATED,
@@ -581,7 +658,13 @@ async fn list_reviews(
 
     let reviews = db::pull_request::list_reviews(&state.db, &pr.id.to_string())
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("failed to list reviews: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
 
     let mut responses = Vec::new();
     for r in reviews {
@@ -641,7 +724,13 @@ async fn submit_review(
         req.body.as_deref(),
     )
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("failed to submit review: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal server error".into(),
+        )
+    })?;
 
     Ok((
         StatusCode::CREATED,

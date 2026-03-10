@@ -53,7 +53,7 @@ mod tests {
         assert!(pattern_matches("main", "main"));
         assert!(!pattern_matches("main", "develop"));
         assert!(pattern_matches("*", "anything"));
-        assert!(pattern_matches("release/*", "release/v1.0"));
+        assert!(pattern_matches("release/*", "release/2026.1.1"));
         assert!(pattern_matches("release/", "release/"));
         assert!(!pattern_matches("release/*", "main"));
     }
@@ -93,7 +93,7 @@ mod tests {
         let wf = Workflow {
             name: "Release".into(),
             on: vec![Trigger::Tag {
-                pattern: "v*".into(),
+                pattern: "2026.*".into(),
             }],
             jobs: Default::default(),
         };
@@ -101,7 +101,7 @@ mod tests {
         assert!(should_trigger(
             &wf,
             &Event::Tag {
-                tag_name: "v1.0".into()
+                tag_name: "2026.1.1".into()
             }
         ));
         assert!(!should_trigger(

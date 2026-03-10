@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (semver: X.Y.Z)'
+        description: 'Version (CalVer: YYYY.M.D or YYYY.M.D-N)'
         required: true
         type: string
 
@@ -20,9 +20,9 @@ jobs:
 
       - name: Validate version format
         run: |
-          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}(-[0-9]+)?$'; then
             echo "Invalid version format: ${{ inputs.version }}"
-            echo "Expected: X.Y.Z or X.Y.Z-pre"
+            echo "Expected: YYYY.M.D or YYYY.M.D-N"
             exit 1
           fi
 
@@ -41,8 +41,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add VERSION
-          git commit -m "release: v${{ inputs.version }}"
-          git tag -a "${{ inputs.version }}" -m "Release v${{ inputs.version }}"
+          git commit -m "release: ${{ inputs.version }}"
+          git tag -a "${{ inputs.version }}" -m "Release ${{ inputs.version }}"
 
       - name: Push
         run: |

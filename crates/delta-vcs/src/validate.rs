@@ -66,7 +66,7 @@ mod tests {
     fn test_valid_refs() {
         assert!(validate_ref("main").is_ok());
         assert!(validate_ref("feature/my-branch").is_ok());
-        assert!(validate_ref("v1.0.0").is_ok());
+        assert!(validate_ref("2026.1.1").is_ok());
         assert!(validate_ref("abc123def456").is_ok());
     }
 

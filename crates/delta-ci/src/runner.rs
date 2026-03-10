@@ -77,23 +77,29 @@ async fn run_pipelines(
             Ok(order) => order,
             Err(e) => {
                 tracing::error!(workflow = filename, "invalid job graph: {}", e);
-                let _ = db::pipeline::update_pipeline_status(
+                if let Err(e) = db::pipeline::update_pipeline_status(
                     ctx.pool,
                     &pipeline.id,
                     db::pipeline::RunStatus::Failed,
                 )
-                .await;
+                .await
+                {
+                    tracing::error!(pipeline_id = %pipeline.id, "failed to mark pipeline as failed: {}", e);
+                }
                 continue;
             }
         };
 
         // Mark pipeline as running
-        let _ = db::pipeline::update_pipeline_status(
+        if let Err(e) = db::pipeline::update_pipeline_status(
             ctx.pool,
             &pipeline.id,
             db::pipeline::RunStatus::Running,
         )
-        .await;
+        .await
+        {
+            tracing::error!(pipeline_id = %pipeline.id, "failed to mark pipeline as running: {}", e);
+        }
 
         // Build environment variables for jobs
         let mut env_vars = ctx.secrets.clone();
@@ -123,13 +129,16 @@ async fn run_pipelines(
             };
 
             // Mark job as running
-            let _ = db::pipeline::update_job_status(
+            if let Err(e) = db::pipeline::update_job_status(
                 ctx.pool,
                 &job_run.id,
                 db::pipeline::RunStatus::Running,
                 None,
             )
-            .await;
+            .await
+            {
+                tracing::error!(job_id = %job_run.id, "failed to mark job as running: {}", e);
+            }
 
             // Execute the job
             let result = execute_job(job_name, job, ctx.repo_path, &env_vars).await;
@@ -147,7 +156,7 @@ async fn run_pipelines(
                 } else {
                     "failed"
                 };
-                let _ = db::pipeline::append_step_log(
+                if let Err(e) = db::pipeline::append_step_log(
                     ctx.pool,
                     &job_run.id,
                     &step.name,
@@ -155,7 +164,10 @@ async fn run_pipelines(
                     &output,
                     status,
                 )
-                .await;
+                .await
+                {
+                    tracing::error!(job_id = %job_run.id, step = &step.name, "failed to store step log: {}", e);
+                }
             }
 
             // Update job status
@@ -165,7 +177,11 @@ async fn run_pipelines(
                 let code = result.steps.last().map(|s| s.exit_code).unwrap_or(-1);
                 (db::pipeline::RunStatus::Failed, Some(code))
             };
-            let _ = db::pipeline::update_job_status(ctx.pool, &job_run.id, status, exit_code).await;
+            if let Err(e) =
+                db::pipeline::update_job_status(ctx.pool, &job_run.id, status, exit_code).await
+            {
+                tracing::error!(job_id = %job_run.id, "failed to update job status: {}", e);
+            }
 
             if !result.success {
                 pipeline_passed = false;
@@ -179,7 +195,11 @@ async fn run_pipelines(
         } else {
             db::pipeline::RunStatus::Failed
         };
-        let _ = db::pipeline::update_pipeline_status(ctx.pool, &pipeline.id, final_status).await;
+        if let Err(e) =
+            db::pipeline::update_pipeline_status(ctx.pool, &pipeline.id, final_status).await
+        {
+            tracing::error!(pipeline_id = %pipeline.id, "failed to update pipeline final status: {}", e);
+        }
 
         tracing::info!(
             workflow = filename,

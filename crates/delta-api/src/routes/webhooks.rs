@@ -39,7 +39,13 @@ async fn list_webhooks(
 
     let webhooks = delta_core::db::webhook::list_for_repo(&state.db, &repo.id.to_string())
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("failed to list webhooks: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
 
     Ok(Json(
         webhooks
@@ -103,7 +109,13 @@ async fn create_webhook(
         &events_json,
     )
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("failed to create webhook: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal server error".into(),
+        )
+    })?;
 
     Ok((
         StatusCode::CREATED,

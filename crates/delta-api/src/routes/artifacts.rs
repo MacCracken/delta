@@ -46,7 +46,13 @@ async fn list_artifacts(
     let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let artifacts = db::artifact::list_for_repo(&state.db, &repo.id.to_string())
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("failed to list artifacts: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
     Ok(Json(artifacts))
 }
 
@@ -56,6 +62,18 @@ async fn upload_artifact(
     AuthUser(user): AuthUser,
     body: Bytes,
 ) -> Result<(StatusCode, Json<db::artifact::Artifact>), (StatusCode, String)> {
+    // Limit artifact upload size to 100 MB
+    const MAX_ARTIFACT_SIZE: usize = 100 * 1024 * 1024;
+    if body.len() > MAX_ARTIFACT_SIZE {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!(
+                "artifact size exceeds maximum of {} bytes",
+                MAX_ARTIFACT_SIZE
+            ),
+        ));
+    }
+
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     if user.id != owner_user.id {
         return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
@@ -83,7 +101,13 @@ async fn upload_artifact(
         },
     )
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("failed to create artifact record: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal server error".into(),
+        )
+    })?;
 
     Ok((StatusCode::CREATED, Json(artifact)))
 }
@@ -144,7 +168,13 @@ async fn delete_artifact(
 
     db::artifact::delete(&state.db, &artifact_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("failed to delete artifact: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
 
     let _ = state.blob_store.delete(&artifact.content_hash);
     Ok(StatusCode::NO_CONTENT)
@@ -160,7 +190,13 @@ async fn list_releases(
     let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let releases = db::release::list_for_repo(&state.db, &repo.id.to_string())
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("failed to list releases: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
     Ok(Json(releases))
 }
 
@@ -181,6 +217,28 @@ async fn create_release(
     AuthUser(user): AuthUser,
     Json(req): Json<CreateReleaseRequest>,
 ) -> Result<(StatusCode, Json<db::release::Release>), (StatusCode, String)> {
+    // Validate input lengths
+    if req.tag_name.is_empty() || req.tag_name.len() > 128 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "tag_name must be 1-128 characters".into(),
+        ));
+    }
+    if req.name.is_empty() || req.name.len() > 256 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "release name must be 1-256 characters".into(),
+        ));
+    }
+    if let Some(body) = &req.body
+        && body.len() > 65536
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "release body must be at most 65536 characters".into(),
+        ));
+    }
+
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     if user.id != owner_user.id {
         return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
@@ -228,7 +286,13 @@ async fn delete_release(
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
     db::release::delete(&state.db, &release.id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("failed to delete release: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -252,20 +252,105 @@ pub fn is_private_url(url_str: &str) -> bool {
     let Some(host) = url.host_str() else {
         return true;
     };
-    host == "localhost"
-        || host == "127.0.0.1"
-        || host == "::1"
-        || host == "[::1]"
-        || host == "0.0.0.0"
-        || host.starts_with("10.")
-        || host.starts_with("192.168.")
-        || host.starts_with("169.254.")
-        || host.starts_with("fe80:")
-        || host.starts_with("fc00:")
-        || host.starts_with("fd")
-        || is_private_172(host)
-        || host.ends_with(".local")
-        || host.ends_with(".internal")
+    let h = host.trim_start_matches('[').trim_end_matches(']');
+    h == "localhost"
+        || h == "127.0.0.1"
+        || h == "::1"
+        || h == "0.0.0.0"
+        || h.starts_with("10.")
+        || h.starts_with("192.168.")
+        || h.starts_with("169.254.")
+        || h.starts_with("fe80:")
+        || h.starts_with("fc00:")
+        || h.starts_with("fd")
+        || is_private_172(h)
+        || h.ends_with(".local")
+        || h.ends_with(".internal")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_private_url_localhost() {
+        assert!(is_private_url("http://localhost/webhook"));
+        assert!(is_private_url("http://localhost:8080/hook"));
+    }
+
+    #[test]
+    fn test_is_private_url_loopback() {
+        assert!(is_private_url("http://127.0.0.1/hook"));
+        assert!(is_private_url("http://127.0.0.1:3000/hook"));
+    }
+
+    #[test]
+    fn test_is_private_url_ipv6_loopback() {
+        assert!(is_private_url("http://[::1]/hook"));
+    }
+
+    #[test]
+    fn test_is_private_url_zero_addr() {
+        assert!(is_private_url("http://0.0.0.0/hook"));
+    }
+
+    #[test]
+    fn test_is_private_url_rfc1918() {
+        assert!(is_private_url("http://10.0.0.1/hook"));
+        assert!(is_private_url("http://10.255.255.255/hook"));
+        assert!(is_private_url("http://192.168.1.1/hook"));
+        assert!(is_private_url("http://192.168.0.100/hook"));
+    }
+
+    #[test]
+    fn test_is_private_url_172_range() {
+        assert!(is_private_url("http://172.16.0.1/hook"));
+        assert!(is_private_url("http://172.31.255.255/hook"));
+        assert!(!is_private_url("http://172.15.0.1/hook"));
+        assert!(!is_private_url("http://172.32.0.1/hook"));
+    }
+
+    #[test]
+    fn test_is_private_url_link_local() {
+        assert!(is_private_url("http://169.254.1.1/hook"));
+    }
+
+    #[test]
+    fn test_is_private_url_ipv6_private() {
+        assert!(is_private_url("http://[fe80::1]/hook"));
+        assert!(is_private_url("http://[fc00::1]/hook"));
+        assert!(is_private_url("http://[fd12::1]/hook"));
+    }
+
+    #[test]
+    fn test_is_private_url_mdns_and_internal() {
+        assert!(is_private_url("http://myhost.local/hook"));
+        assert!(is_private_url("http://service.internal/hook"));
+    }
+
+    #[test]
+    fn test_is_private_url_public() {
+        assert!(!is_private_url("https://example.com/hook"));
+        assert!(!is_private_url("https://api.github.com/webhook"));
+        assert!(!is_private_url("http://8.8.8.8/hook"));
+    }
+
+    #[test]
+    fn test_is_private_url_unparseable() {
+        assert!(is_private_url("not-a-url"));
+        assert!(is_private_url(""));
+    }
+
+    #[test]
+    fn test_is_private_172_edge_cases() {
+        assert!(is_private_172("172.16.0.1"));
+        assert!(is_private_172("172.31.255.255"));
+        assert!(!is_private_172("172.15.0.1"));
+        assert!(!is_private_172("172.32.0.1"));
+        assert!(!is_private_172("173.16.0.1"));
+        assert!(!is_private_172("172.abc.0.1"));
+        assert!(!is_private_172("not-an-ip"));
+    }
 }
 
 /// Dispatch push webhooks for a repository.

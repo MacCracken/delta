@@ -156,9 +156,9 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          name: Delta v${{ steps.version.outputs.version }}
+          name: Delta ${{ steps.version.outputs.version }}
           body: |
-            ## Delta v${{ steps.version.outputs.version }}
+            ## Delta ${{ steps.version.outputs.version }}
 
             ### Changes
             ${{ steps.changelog.outputs.changelog }}

@@ -56,7 +56,13 @@ async fn list_repos(
     let viewer_id = user.as_ref().map(|u| u.id.to_string());
     let repos = db::repo::list_visible(&state.db, viewer_id.as_deref())
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("failed to list repos: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
 
     // We need owner usernames — for now use the owner field (which stores owner_id)
     // TODO: join with users table for proper username resolution
@@ -202,7 +208,13 @@ async fn update_repo(
         req.default_branch.as_deref(),
     )
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("failed to update repo: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal server error".into(),
+        )
+    })?;
 
     Ok(Json(RepoResponse::from_repo(updated, &owner)))
 }
@@ -227,7 +239,13 @@ async fn delete_repo(
 
     db::repo::delete(&state.db, &repo.id.to_string())
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("failed to delete repo: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
 
     // Remove from disk
     if let Err(e) = state.repo_host.delete(&owner, &name) {

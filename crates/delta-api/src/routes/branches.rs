@@ -100,7 +100,13 @@ async fn list_protections(
     let protections =
         delta_core::db::branch_protection::list_for_repo(&state.db, &repo.id.to_string())
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("failed to list branch protections: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal server error".into(),
+                )
+            })?;
 
     Ok(Json(
         protections
@@ -208,7 +214,13 @@ async fn delete_protection(
     let protections =
         delta_core::db::branch_protection::list_for_repo(&state.db, &repo.id.to_string())
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("failed to list branch protections: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal server error".into(),
+                )
+            })?;
     if !protections
         .iter()
         .any(|p| p.id.to_string() == protection_id)

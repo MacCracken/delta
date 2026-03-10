@@ -26,7 +26,7 @@ impl BranchProtection {
         if self.pattern == branch {
             return true;
         }
-        // Simple glob: "release/*" matches "release/v1.0"
+        // Simple glob: "release/*" matches "release/2026.1.1"
         if let Some(prefix) = self.pattern.strip_suffix("/*") {
             return branch.starts_with(&format!("{}/", prefix));
         }
@@ -71,7 +71,7 @@ mod tests {
     #[test]
     fn test_glob_match() {
         let rule = make_rule("release/*", false, false);
-        assert!(rule.matches("release/v1.0"));
+        assert!(rule.matches("release/2026.1.1"));
         assert!(rule.matches("release/beta"));
         assert!(!rule.matches("main"));
         assert!(!rule.matches("release"));

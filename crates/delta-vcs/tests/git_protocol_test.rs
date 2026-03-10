@@ -104,7 +104,7 @@ fn test_refs_after_commit() {
 
     // Create a tag
     std::process::Command::new("git")
-        .args(["tag", "v0.1.0"])
+        .args(["tag", "2026.1.1"])
         .current_dir(&repo_path)
         .output()
         .unwrap();
@@ -118,7 +118,7 @@ fn test_refs_after_commit() {
 
     let tags = delta_vcs::refs::list_tags(&repo_path).unwrap();
     assert_eq!(tags.len(), 1);
-    assert_eq!(tags[0].name, "v0.1.0");
+    assert_eq!(tags[0].name, "2026.1.1");
 
     let head = delta_vcs::refs::head_commit(&repo_path).unwrap();
     assert!(head.is_some());
