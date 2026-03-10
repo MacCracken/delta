@@ -1,4 +1,4 @@
-# Delta — multi-stage production build
+# Delta — multi-stage production build on AGNOS
 # Stage 1: Build
 FROM rust:1.85-bookworm AS builder
 
@@ -10,14 +10,16 @@ WORKDIR /build
 COPY . .
 RUN cargo build --release --package delta-api
 
-# Stage 2: Runtime
-FROM debian:bookworm-slim
+# Stage 2: Runtime on AGNOS
+FROM ghcr.io/maccracken/agnosticos:latest
 
-RUN apt-get update && apt-get install -y \
-    ca-certificates git tini \
+USER root
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
-RUN groupadd -r delta && useradd -r -g delta -u 1000 delta
+RUN groupadd -r delta && useradd -r -g delta -d /var/lib/delta -s /usr/sbin/nologin delta
 
 RUN mkdir -p /var/lib/delta/repos \
              /var/lib/delta/artifacts \
@@ -29,6 +31,7 @@ COPY --from=builder /build/target/release/delta-api /usr/local/bin/delta-server
 COPY config/delta.example.toml /etc/delta/config.toml
 
 USER delta
+WORKDIR /var/lib/delta
 EXPOSE 8070
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

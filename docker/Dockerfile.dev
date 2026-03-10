@@ -1,9 +1,15 @@
-# Delta — development container
-FROM rust:1.85-bookworm
+# Delta — development container on AGNOS
+FROM ghcr.io/maccracken/agnosticos:latest
 
-RUN apt-get update && apt-get install -y \
-    cmake pkg-config libssl-dev git curl \
+USER root
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake pkg-config libssl-dev git build-essential \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Rust toolchain
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.85.0
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 RUN cargo install cargo-watch --locked
 

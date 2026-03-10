@@ -100,8 +100,8 @@ jobs:
 
       - name: Generate CycloneDX SBOM
         run: |
-          cargo cyclonedx --format json --output-file delta-sbom.json
-          cargo cyclonedx --format xml --output-file delta-sbom.xml
+          cargo cyclonedx --format json --override-filename delta-sbom
+          cargo cyclonedx --format xml --override-filename delta-sbom
 
       - name: Generate license report
         run: |
@@ -181,6 +181,9 @@ jobs:
     name: Publish Container
     runs-on: ubuntu-latest
     needs: ci-gate
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
 
@@ -191,6 +194,8 @@ jobs:
           echo "version=${RAW}" >> "$GITHUB_OUTPUT"
           BUILD=$(echo "$RAW" | sed -E 's/^([0-9]{4})\.([0-9]{1,2})\.([0-9]{1,2})(-([0-9]+))?$/printf "%04d%02d%02d%s" \1 \2 \3 \5/e')
           echo "build=${BUILD}" >> "$GITHUB_OUTPUT"
+          # Docker requires lowercase repository names
+          echo "image_name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -213,8 +218,8 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
-            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.build }}
-            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ steps.version.outputs.image_name }}:${{ steps.version.outputs.version }}
+            ghcr.io/${{ steps.version.outputs.image_name }}:${{ steps.version.outputs.build }}
+            ghcr.io/${{ steps.version.outputs.image_name }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
