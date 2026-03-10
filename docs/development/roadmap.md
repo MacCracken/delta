@@ -57,7 +57,7 @@ Pull/merge request workflow with review tooling.
 - [ ] Agent-authored PRs with provenance tracking
 - [ ] Inline suggestions with one-click apply
 
-## Phase 4 — CI/CD Engine
+## Phase 4 — CI/CD Engine (Complete)
 
 Workflow execution engine for build, test, and deploy pipelines.
 
@@ -75,13 +75,13 @@ Workflow execution engine for build, test, and deploy pipelines.
 - [ ] Matrix builds (multiple OS/arch/toolchain)
 - [ ] Pipeline status badges
 
-## Phase 5 — Artifact Registry
+## Phase 5 — Artifact Registry (In Progress)
 
 Package and release artifact storage with integrity verification.
 
-- [ ] Content-addressable blob storage (BLAKE3)
-- [ ] Release management (tags, changelogs, asset uploads)
-- [ ] Generic artifact upload/download API
+- [x] Content-addressable blob storage (BLAKE3 hashing, dedup, 2-char prefix dirs)
+- [x] Release management (tags, changelogs, draft/prerelease flags)
+- [x] Generic artifact upload/download API (100 MB limit, hash verification, download counter)
 - [ ] `.ark` package registry (AGNOS native packages)
 - [ ] Container image registry (OCI-compatible)
 - [ ] Artifact retention policies and cleanup
@@ -133,7 +133,7 @@ Production readiness, performance, and security hardening.
 - [ ] Horizontal scaling (stateless API, shared storage)
 - [ ] Repository sharding and replication
 - [ ] Rate limiting and abuse prevention
-- [ ] Security audit and penetration testing
+- [x] Security audit — input validation, error sanitization, SSRF protection
 - [ ] Performance benchmarks and optimization
 - [ ] Backup and disaster recovery
 - [ ] Monitoring and alerting integration

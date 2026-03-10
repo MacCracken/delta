@@ -268,91 +268,6 @@ pub fn is_private_url(url_str: &str) -> bool {
         || h.ends_with(".internal")
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_is_private_url_localhost() {
-        assert!(is_private_url("http://localhost/webhook"));
-        assert!(is_private_url("http://localhost:8080/hook"));
-    }
-
-    #[test]
-    fn test_is_private_url_loopback() {
-        assert!(is_private_url("http://127.0.0.1/hook"));
-        assert!(is_private_url("http://127.0.0.1:3000/hook"));
-    }
-
-    #[test]
-    fn test_is_private_url_ipv6_loopback() {
-        assert!(is_private_url("http://[::1]/hook"));
-    }
-
-    #[test]
-    fn test_is_private_url_zero_addr() {
-        assert!(is_private_url("http://0.0.0.0/hook"));
-    }
-
-    #[test]
-    fn test_is_private_url_rfc1918() {
-        assert!(is_private_url("http://10.0.0.1/hook"));
-        assert!(is_private_url("http://10.255.255.255/hook"));
-        assert!(is_private_url("http://192.168.1.1/hook"));
-        assert!(is_private_url("http://192.168.0.100/hook"));
-    }
-
-    #[test]
-    fn test_is_private_url_172_range() {
-        assert!(is_private_url("http://172.16.0.1/hook"));
-        assert!(is_private_url("http://172.31.255.255/hook"));
-        assert!(!is_private_url("http://172.15.0.1/hook"));
-        assert!(!is_private_url("http://172.32.0.1/hook"));
-    }
-
-    #[test]
-    fn test_is_private_url_link_local() {
-        assert!(is_private_url("http://169.254.1.1/hook"));
-    }
-
-    #[test]
-    fn test_is_private_url_ipv6_private() {
-        assert!(is_private_url("http://[fe80::1]/hook"));
-        assert!(is_private_url("http://[fc00::1]/hook"));
-        assert!(is_private_url("http://[fd12::1]/hook"));
-    }
-
-    #[test]
-    fn test_is_private_url_mdns_and_internal() {
-        assert!(is_private_url("http://myhost.local/hook"));
-        assert!(is_private_url("http://service.internal/hook"));
-    }
-
-    #[test]
-    fn test_is_private_url_public() {
-        assert!(!is_private_url("https://example.com/hook"));
-        assert!(!is_private_url("https://api.github.com/webhook"));
-        assert!(!is_private_url("http://8.8.8.8/hook"));
-    }
-
-    #[test]
-    fn test_is_private_url_unparseable() {
-        assert!(is_private_url("not-a-url"));
-        assert!(is_private_url(""));
-    }
-
-    #[test]
-    fn test_is_private_172_edge_cases() {
-        assert!(is_private_172("172.16.0.1"));
-        assert!(is_private_172("172.31.255.255"));
-        assert!(!is_private_172("172.15.0.1"));
-        assert!(!is_private_172("172.32.0.1"));
-        assert!(!is_private_172("173.16.0.1"));
-        assert!(!is_private_172("172.abc.0.1"));
-        assert!(!is_private_172("not-an-ip"));
-    }
-}
-
 /// Dispatch push webhooks for a repository.
 async fn dispatch_push_webhooks(
     db: &sqlx::SqlitePool,
@@ -492,4 +407,78 @@ async fn dispatch_push_pipelines(
     };
     delta_ci::runner::run_push_pipelines(&ctx, &branch).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_private_url_localhost() {
+        assert!(is_private_url("http://localhost/webhook"));
+        assert!(is_private_url("http://localhost:8080/hook"));
+    }
+    #[test]
+    fn test_is_private_url_loopback() {
+        assert!(is_private_url("http://127.0.0.1/hook"));
+        assert!(is_private_url("http://127.0.0.1:3000/hook"));
+    }
+    #[test]
+    fn test_is_private_url_ipv6_loopback() {
+        assert!(is_private_url("http://[::1]/hook"));
+    }
+    #[test]
+    fn test_is_private_url_zero_addr() {
+        assert!(is_private_url("http://0.0.0.0/hook"));
+    }
+    #[test]
+    fn test_is_private_url_rfc1918() {
+        assert!(is_private_url("http://10.0.0.1/hook"));
+        assert!(is_private_url("http://10.255.255.255/hook"));
+        assert!(is_private_url("http://192.168.1.1/hook"));
+        assert!(is_private_url("http://192.168.0.100/hook"));
+    }
+    #[test]
+    fn test_is_private_url_172_range() {
+        assert!(is_private_url("http://172.16.0.1/hook"));
+        assert!(is_private_url("http://172.31.255.255/hook"));
+        assert!(!is_private_url("http://172.15.0.1/hook"));
+        assert!(!is_private_url("http://172.32.0.1/hook"));
+    }
+    #[test]
+    fn test_is_private_url_link_local() {
+        assert!(is_private_url("http://169.254.1.1/hook"));
+    }
+    #[test]
+    fn test_is_private_url_ipv6_private() {
+        assert!(is_private_url("http://[fe80::1]/hook"));
+        assert!(is_private_url("http://[fc00::1]/hook"));
+        assert!(is_private_url("http://[fd12::1]/hook"));
+    }
+    #[test]
+    fn test_is_private_url_mdns_and_internal() {
+        assert!(is_private_url("http://myhost.local/hook"));
+        assert!(is_private_url("http://service.internal/hook"));
+    }
+    #[test]
+    fn test_is_private_url_public() {
+        assert!(!is_private_url("https://example.com/hook"));
+        assert!(!is_private_url("https://api.github.com/webhook"));
+        assert!(!is_private_url("http://8.8.8.8/hook"));
+    }
+    #[test]
+    fn test_is_private_url_unparseable() {
+        assert!(is_private_url("not-a-url"));
+        assert!(is_private_url(""));
+    }
+    #[test]
+    fn test_is_private_172_edge_cases() {
+        assert!(is_private_172("172.16.0.1"));
+        assert!(is_private_172("172.31.255.255"));
+        assert!(!is_private_172("172.15.0.1"));
+        assert!(!is_private_172("172.32.0.1"));
+        assert!(!is_private_172("173.16.0.1"));
+        assert!(!is_private_172("172.abc.0.1"));
+        assert!(!is_private_172("not-an-ip"));
+    }
 }
