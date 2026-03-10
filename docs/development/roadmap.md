@@ -132,6 +132,29 @@ Production readiness, performance, and security hardening.
 
 ---
 
+## AGNOS Integration Checklist
+
+Items Delta needs to complete for full AGNOS ecosystem integration.
+These cut across phases and should be prioritized alongside phase work.
+
+### Delta-Side (this repo)
+
+- [x] Package manifest (`deploy/agnosticos/delta.pkg.toml`) — ark install metadata
+- [x] Systemd service file with security hardening (`deploy/delta.service`)
+- [x] System user creation hooks (pre/post install)
+- [x] Capability declaration (code-hosting, git-http endpoints)
+- [ ] **Takumi recipe** — `recipes/marketplace/delta.toml` in agnosticos repo for building Delta as an .ark package from source
+- [ ] **MCP server** — expose Delta API as MCP tools (create-repo, list-repos, create-pr, search-code) for agnoshi shell integration
+- [ ] **Hoosh provider** — optional LLM provider config for AI-powered code review (use local hoosh gateway at port 8088)
+- [ ] **Daimon agent registration** — on startup, register with daimon at port 8090 (`/v1/agents/register`) with capabilities
+- [ ] **Sigil trust** — sign artifacts and releases with ed25519 keys compatible with AGNOS sigil trust chain
+- [ ] **Argonaut service target** — declare service dependencies (requires: postgres/sqlite, network; wanted-by: agnos-core)
+- [ ] **Health endpoint for daimon** — `/health` already exists, ensure it returns JSON format expected by daimon heartbeat
+- [ ] **Structured logging** — output JSON logs compatible with AGNOS journald integration
+- [ ] **`.ark` registry support** — Phase 5 artifact registry should natively store/serve .ark packages
+
+---
+
 ## Design Principles
 
 1. **Privacy-first** — self-hosted by default, no telemetry, user owns their data
