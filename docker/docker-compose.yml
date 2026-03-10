@@ -1,0 +1,34 @@
+services:
+  delta-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8070:8070"
+    volumes:
+      - delta-repos:/var/lib/delta/repos
+      - delta-artifacts:/var/lib/delta/artifacts
+      - delta-data:/var/lib/delta/data
+    environment:
+      - RUST_LOG=info,delta=debug
+    restart: unless-stopped
+
+  delta-dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    ports:
+      - "8070:8070"
+    volumes:
+      - ..:/workspace
+      - cargo-cache:/usr/local/cargo/registry
+    environment:
+      - RUST_LOG=debug
+    profiles:
+      - dev
+
+volumes:
+  delta-repos:
+  delta-artifacts:
+  delta-data:
+  cargo-cache:

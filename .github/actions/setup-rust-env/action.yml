@@ -1,0 +1,60 @@
+name: 'Setup Rust Environment'
+description: 'Install Rust toolchain, cache dependencies, and prepare build environment'
+
+inputs:
+  toolchain:
+    description: 'Rust toolchain version'
+    required: false
+    default: 'stable'
+  targets:
+    description: 'Additional Rust targets to install'
+    required: false
+    default: ''
+  components:
+    description: 'Rust components to install'
+    required: false
+    default: 'rustfmt, clippy'
+  cache-prefix:
+    description: 'Cache key prefix for segmentation'
+    required: false
+    default: 'delta'
+  install-cross:
+    description: 'Install cross-compilation tool'
+    required: false
+    default: 'false'
+
+outputs:
+  project-version:
+    description: 'Project version from VERSION file'
+    value: ${{ steps.version.outputs.version }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Read VERSION
+      id: version
+      shell: bash
+      run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        targets: ${{ inputs.targets }}
+        components: ${{ inputs.components }}
+
+    - name: Install cross
+      if: inputs.install-cross == 'true'
+      shell: bash
+      run: cargo install cross --locked
+
+    - name: Cache cargo registry and build
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target/
+        key: ${{ inputs.cache-prefix }}-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ inputs.cache-prefix }}-${{ runner.os }}-cargo-

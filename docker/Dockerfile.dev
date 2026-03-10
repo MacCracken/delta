@@ -1,0 +1,15 @@
+# Delta — development container
+FROM rust:1.85-bookworm
+
+RUN apt-get update && apt-get install -y \
+    cmake pkg-config libssl-dev git curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN cargo install cargo-watch --locked
+
+WORKDIR /workspace
+VOLUME /workspace
+
+EXPOSE 8070
+
+CMD ["cargo", "watch", "-x", "run --package delta-api"]

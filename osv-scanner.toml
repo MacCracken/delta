@@ -1,0 +1,8 @@
+[scanning]
+ecosystems = ["crates.io"]
+tools = ["cargo"]
+exclusions = ["test_data", "fuzz", "benches"]
+
+[output]
+format = "json"
+file = "vulnerability-report.json"

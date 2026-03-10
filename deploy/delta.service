@@ -1,0 +1,40 @@
+[Unit]
+Description=Delta — Code Hosting, CI/CD, and Artifact Registry
+Documentation=https://github.com/agnostos/delta
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/delta-server --config /etc/delta/config.toml
+Environment=RUST_LOG=info
+User=delta
+Group=delta
+
+Restart=on-failure
+RestartSec=5s
+WatchdogSec=30s
+
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+
+# Security hardening
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+
+ReadWritePaths=/var/lib/delta
+ReadOnlyPaths=/etc/delta
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=delta
+
+[Install]
+WantedBy=multi-user.target

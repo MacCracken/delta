@@ -30,6 +30,12 @@ logs/
 # Coverage
 coverage/
 *.profraw
+tarpaulin-report.html
+cobertura.xml
+
+# Security scanning
+vulnerability-report.json
+trivy-results.sarif
 
 # Credentials
 *.pem

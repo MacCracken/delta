@@ -1,0 +1,211 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '[0-9]*'
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  security-events: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci-gate:
+    name: CI Gate
+    uses: ./.github/workflows/ci.yml
+
+  build-release:
+    name: Build Release (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    needs: ci-gate
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            arch: amd64
+            use-cross: false
+          - target: aarch64-unknown-linux-gnu
+            arch: arm64
+            use-cross: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        id: setup
+        uses: ./.github/actions/setup-rust-env
+        with:
+          targets: ${{ matrix.target }}
+          cache-prefix: release-${{ matrix.target }}
+          install-cross: ${{ matrix.use-cross }}
+
+      - name: Build (native)
+        if: ${{ !matrix.use-cross }}
+        run: cargo build --release --workspace
+
+      - name: Build (cross)
+        if: ${{ matrix.use-cross }}
+        run: cross build --release --target ${{ matrix.target }} --workspace
+
+      - name: Package release
+        run: |
+          VERSION="${{ steps.setup.outputs.project-version }}"
+          RELEASE_DIR="delta-${VERSION}-linux-${{ matrix.arch }}"
+          mkdir -p "${RELEASE_DIR}"
+
+          if [ "${{ matrix.use-cross }}" = "true" ]; then
+            BIN_DIR="target/${{ matrix.target }}/release"
+          else
+            BIN_DIR="target/release"
+          fi
+
+          cp "${BIN_DIR}/delta-api" "${RELEASE_DIR}/"
+          cp LICENSE README.md "${RELEASE_DIR}/"
+          cp -r docs/ "${RELEASE_DIR}/docs/" 2>/dev/null || true
+          cp config/delta.example.toml "${RELEASE_DIR}/"
+          cp deploy/delta.service "${RELEASE_DIR}/"
+
+          tar czf "${RELEASE_DIR}.tar.gz" "${RELEASE_DIR}"
+          sha256sum "${RELEASE_DIR}.tar.gz" > "${RELEASE_DIR}.tar.gz.sha256"
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.arch }}
+          path: |
+            delta-*.tar.gz
+            delta-*.tar.gz.sha256
+          retention-days: 7
+
+  generate-sbom:
+    name: Generate SBOM
+    runs-on: ubuntu-latest
+    needs: ci-gate
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust-env
+        with:
+          cache-prefix: sbom
+
+      - name: Install SBOM tools
+        run: |
+          cargo install cargo-cyclonedx --locked
+          cargo install cargo-license --locked
+
+      - name: Generate CycloneDX SBOM
+        run: |
+          cargo cyclonedx --format json --output-file delta-sbom.json
+          cargo cyclonedx --format xml --output-file delta-sbom.xml
+
+      - name: Generate license report
+        run: |
+          cargo license --json > delta-licenses.json
+          cargo license > delta-licenses.txt
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: |
+            delta-sbom.*
+            delta-licenses.*
+          retention-days: 90
+
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-release, generate-sbom]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: version
+        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG=$(git tag --sort=-version:refname | head -2 | tail -1)
+          if [ -z "$PREV_TAG" ]; then
+            CHANGELOG=$(git log --oneline --no-decorate)
+          else
+            CHANGELOG=$(git log --oneline --no-decorate "${PREV_TAG}..HEAD")
+          fi
+          echo "changelog<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$CHANGELOG" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Delta v${{ steps.version.outputs.version }}
+          body: |
+            ## Delta v${{ steps.version.outputs.version }}
+
+            ### Changes
+            ${{ steps.changelog.outputs.changelog }}
+
+            ### Downloads
+            | Platform | Archive |
+            |----------|---------|
+            | Linux amd64 | `delta-${{ steps.version.outputs.version }}-linux-amd64.tar.gz` |
+            | Linux arm64 | `delta-${{ steps.version.outputs.version }}-linux-arm64.tar.gz` |
+
+            ### Verification
+            Each archive includes a `.sha256` checksum file.
+          files: |
+            release-artifacts/release-amd64/*
+            release-artifacts/release-arm64/*
+            release-artifacts/sbom/*
+          prerelease: true
+
+  container:
+    name: Publish Container
+    runs-on: ubuntu-latest
+    needs: ci-gate
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:alpha
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

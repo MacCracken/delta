@@ -1,0 +1,71 @@
+[package]
+name = "delta"
+description = "Code hosting, CI/CD pipelines, and artifact registry"
+license = "GPL-3.0"
+version_file = "VERSION"
+
+[build]
+type = "cargo"
+workspace_members = ["delta-api"]
+release = true
+
+[install]
+[install.bin]
+delta-api = "/usr/local/bin/delta-server"
+
+[install.config]
+"config/delta.example.toml" = "/etc/delta/config.toml"
+
+[install.service]
+"deploy/delta.service" = "/etc/systemd/system/delta.service"
+
+[install.directories]
+"/var/lib/delta/repos" = { owner = "delta", mode = "0750" }
+"/var/lib/delta/artifacts" = { owner = "delta", mode = "0750" }
+"/var/lib/delta/data" = { owner = "delta", mode = "0750" }
+"/etc/delta" = { owner = "root", mode = "0755" }
+
+[user]
+name = "delta"
+system = true
+shell = "/usr/sbin/nologin"
+home = "/var/lib/delta"
+
+[hooks]
+pre_install = """
+getent group delta >/dev/null || groupadd -r delta
+getent passwd delta >/dev/null || useradd -r -g delta -d /var/lib/delta -s /usr/sbin/nologin delta
+"""
+
+post_install = """
+chown -R delta:delta /var/lib/delta
+systemctl daemon-reload
+systemctl enable delta.service
+agnos register delta
+"""
+
+post_remove = """
+agnos deregister delta
+systemctl stop delta.service
+systemctl disable delta.service
+"""
+
+[capabilities]
+declares = ["code-hosting"]
+
+[capabilities.endpoints]
+rest-api = { port = 8070, path = "/health" }
+git-http = { port = 8070, path = "/{owner}/{name}.git" }
+
+[capabilities.provides]
+features = [
+    "git-hosting",
+    "smart-http-protocol",
+    "pull-requests",
+    "ci-cd-pipelines",
+    "artifact-registry",
+    "release-management",
+    "branch-protection",
+    "webhook-delivery",
+    "audit-logging",
+]
