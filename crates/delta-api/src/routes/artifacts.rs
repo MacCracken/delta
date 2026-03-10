@@ -16,11 +16,26 @@ use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/{owner}/{name}/artifacts", get(list_artifacts).post(upload_artifact))
-        .route("/{owner}/{name}/artifacts/{artifact_id}", get(get_artifact).delete(delete_artifact))
-        .route("/{owner}/{name}/artifacts/{artifact_id}/download", get(download_artifact))
-        .route("/{owner}/{name}/releases", get(list_releases).post(create_release))
-        .route("/{owner}/{name}/releases/{tag}", get(get_release).delete(delete_release))
+        .route(
+            "/{owner}/{name}/artifacts",
+            get(list_artifacts).post(upload_artifact),
+        )
+        .route(
+            "/{owner}/{name}/artifacts/{artifact_id}",
+            get(get_artifact).delete(delete_artifact),
+        )
+        .route(
+            "/{owner}/{name}/artifacts/{artifact_id}/download",
+            get(download_artifact),
+        )
+        .route(
+            "/{owner}/{name}/releases",
+            get(list_releases).post(create_release),
+        )
+        .route(
+            "/{owner}/{name}/releases/{tag}",
+            get(get_release).delete(delete_release),
+        )
 }
 
 async fn list_artifacts(
@@ -46,8 +61,12 @@ async fn upload_artifact(
     }
 
     // Store in blob store
-    let content_hash = state.blob_store.store(&body)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("storage error: {}", e)))?;
+    let content_hash = state.blob_store.store(&body).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("storage error: {}", e),
+        )
+    })?;
 
     let artifact = db::artifact::create(
         &state.db,
@@ -86,7 +105,9 @@ async fn download_artifact(
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
 
-    let data = state.blob_store.read(&artifact.content_hash)
+    let data = state
+        .blob_store
+        .read(&artifact.content_hash)
         .map_err(|e| (StatusCode::NOT_FOUND, format!("blob not found: {}", e)))?;
 
     let _ = db::artifact::increment_download(&state.db, &artifact_id).await;

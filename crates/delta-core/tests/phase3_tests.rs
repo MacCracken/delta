@@ -12,7 +12,10 @@ async fn setup_pool() -> sqlx::SqlitePool {
         include_str!("../migrations/002_git_protocol.sql"),
         include_str!("../migrations/003_pull_requests.sql"),
     ] {
-        sqlx::query(migration).execute(&pool).await.expect("migration failed");
+        sqlx::query(migration)
+            .execute(&pool)
+            .await
+            .expect("migration failed");
     }
 
     pool
@@ -33,9 +36,15 @@ async fn setup_fixture() -> TestFixture {
     let reviewer = db::user::create(&pool, "bob", "bob@example.com", "pw", false)
         .await
         .unwrap();
-    let repo = db::repo::create(&pool, &user.id.to_string(), "myrepo", None, Visibility::Public)
-        .await
-        .unwrap();
+    let repo = db::repo::create(
+        &pool,
+        &user.id.to_string(),
+        "myrepo",
+        None,
+        Visibility::Public,
+    )
+    .await
+    .unwrap();
     TestFixture {
         pool,
         user_id: user.id.to_string(),
@@ -187,14 +196,9 @@ async fn test_mark_merged() {
     let f = setup_fixture().await;
     let pr = create_test_pr(&f).await;
 
-    let merged = db::pull_request::mark_merged(
-        &f.pool,
-        &pr.id.to_string(),
-        &f.user_id,
-        "squash",
-    )
-    .await
-    .unwrap();
+    let merged = db::pull_request::mark_merged(&f.pool, &pr.id.to_string(), &f.user_id, "squash")
+        .await
+        .unwrap();
 
     assert_eq!(merged.state, PrState::Merged);
     assert!(merged.merged_at.is_some());
@@ -210,17 +214,10 @@ async fn test_pr_comments() {
     let pr_id = pr.id.to_string();
 
     // General comment
-    let c1 = db::pull_request::add_comment(
-        &f.pool,
-        &pr_id,
-        &f.user_id,
-        "Looks good!",
-        None,
-        None,
-        None,
-    )
-    .await
-    .unwrap();
+    let c1 =
+        db::pull_request::add_comment(&f.pool, &pr_id, &f.user_id, "Looks good!", None, None, None)
+            .await
+            .unwrap();
     assert_eq!(c1.body, "Looks good!");
     assert!(c1.file_path.is_none());
 
@@ -288,15 +285,9 @@ async fn test_pr_reviews() {
     assert_eq!(reviews.len(), 1);
 
     // Approve
-    db::pull_request::submit_review(
-        &f.pool,
-        &pr_id,
-        &f.reviewer_id,
-        ReviewState::Approved,
-        None,
-    )
-    .await
-    .unwrap();
+    db::pull_request::submit_review(&f.pool, &pr_id, &f.reviewer_id, ReviewState::Approved, None)
+        .await
+        .unwrap();
 
     let reviews = db::pull_request::list_reviews(&f.pool, &pr_id)
         .await
@@ -317,15 +308,9 @@ async fn test_count_approvals() {
     assert_eq!(count, 0);
 
     // Add approval
-    db::pull_request::submit_review(
-        &f.pool,
-        &pr_id,
-        &f.reviewer_id,
-        ReviewState::Approved,
-        None,
-    )
-    .await
-    .unwrap();
+    db::pull_request::submit_review(&f.pool, &pr_id, &f.reviewer_id, ReviewState::Approved, None)
+        .await
+        .unwrap();
 
     let count = db::pull_request::count_approvals(&f.pool, &pr_id)
         .await

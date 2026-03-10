@@ -33,7 +33,12 @@ pub async fn diff_stat(repo_path: &Path, base: &str, head: &str) -> Result<DiffS
     validate_ref(base)?;
     validate_ref(head)?;
     let output = Command::new("git")
-        .args(["diff", "--stat", "--numstat", &format!("{}...{}", base, head)])
+        .args([
+            "diff",
+            "--stat",
+            "--numstat",
+            &format!("{}...{}", base, head),
+        ])
         .current_dir(repo_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -43,7 +48,10 @@ pub async fn diff_stat(repo_path: &Path, base: &str, head: &str) -> Result<DiffS
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(DeltaError::Storage(format!("git diff --stat failed: {}", stderr)));
+        return Err(DeltaError::Storage(format!(
+            "git diff --stat failed: {}",
+            stderr
+        )));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);

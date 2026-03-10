@@ -77,7 +77,10 @@ pub async fn delete(pool: &SqlitePool, repo_id: &str, name: &str) -> Result<()> 
         .map_err(|e| DeltaError::Storage(e.to_string()))?;
 
     if result.rows_affected() == 0 {
-        return Err(DeltaError::RepoNotFound(format!("secret '{}' not found", name)));
+        return Err(DeltaError::RepoNotFound(format!(
+            "secret '{}' not found",
+            name
+        )));
     }
     Ok(())
 }

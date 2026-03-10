@@ -22,12 +22,11 @@ async fn next_pr_number(pool: &SqlitePool, repo_id: &str) -> Result<i64> {
     .await
     .map_err(|e| DeltaError::Storage(e.to_string()))?;
 
-    let row: (i64,) =
-        sqlx::query_as("SELECT next_number FROM pr_counters WHERE repo_id = ?")
-            .bind(repo_id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| DeltaError::Storage(e.to_string()))?;
+    let row: (i64,) = sqlx::query_as("SELECT next_number FROM pr_counters WHERE repo_id = ?")
+        .bind(repo_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| DeltaError::Storage(e.to_string()))?;
 
     tx.commit()
         .await
@@ -86,15 +85,16 @@ pub async fn get_by_id(pool: &SqlitePool, id: &str) -> Result<PullRequest> {
 }
 
 pub async fn get_by_number(pool: &SqlitePool, repo_id: &str, number: i64) -> Result<PullRequest> {
-    let row = sqlx::query_as::<_, PrRow>(
-        "SELECT * FROM pull_requests WHERE repo_id = ? AND number = ?",
-    )
-    .bind(repo_id)
-    .bind(number)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| DeltaError::Storage(e.to_string()))?
-    .ok_or_else(|| DeltaError::RepoNotFound(format!("pull request #{} not found", number)))?;
+    let row =
+        sqlx::query_as::<_, PrRow>("SELECT * FROM pull_requests WHERE repo_id = ? AND number = ?")
+            .bind(repo_id)
+            .bind(number)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| DeltaError::Storage(e.to_string()))?
+            .ok_or_else(|| {
+                DeltaError::RepoNotFound(format!("pull request #{} not found", number))
+            })?;
     Ok(row.into_pr())
 }
 

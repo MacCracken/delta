@@ -207,9 +207,7 @@ async fn test_webhook_crud() {
     .unwrap();
 
     // List
-    let webhooks = db::webhook::list_for_repo(&pool, &repo_id)
-        .await
-        .unwrap();
+    let webhooks = db::webhook::list_for_repo(&pool, &repo_id).await.unwrap();
     assert_eq!(webhooks.len(), 1);
     assert_eq!(webhooks[0].url, "https://example.com/webhook");
 
@@ -227,9 +225,7 @@ async fn test_webhook_crud() {
     // Delete
     db::webhook::delete(&pool, &id, &repo_id).await.unwrap();
 
-    let webhooks = db::webhook::list_for_repo(&pool, &repo_id)
-        .await
-        .unwrap();
+    let webhooks = db::webhook::list_for_repo(&pool, &repo_id).await.unwrap();
     assert_eq!(webhooks.len(), 0);
 }
 
@@ -261,10 +257,11 @@ async fn test_webhook_delivery_recording() {
     .unwrap();
 
     // Verify delivery was recorded (query directly)
-    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM webhook_deliveries WHERE webhook_id = ?")
-        .bind(&webhook_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM webhook_deliveries WHERE webhook_id = ?")
+            .bind(&webhook_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(count.0, 1);
 }

@@ -6,17 +6,17 @@ use axum::{
 };
 use delta_core::db;
 use delta_core::models::pull_request::CheckState;
+use delta_core::models::repo::Visibility;
 use serde::{Deserialize, Serialize};
 
 use crate::extractors::AuthUser;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/{owner}/{name}/commits/{sha}/statuses",
-            get(list_statuses).post(create_status),
-        )
+    Router::new().route(
+        "/{owner}/{name}/commits/{sha}/statuses",
+        get(list_statuses).post(create_status),
+    )
 }
 
 #[derive(Serialize)]
@@ -41,6 +41,11 @@ async fn list_statuses(
     let repo = db::repo::get_by_owner_and_name(&state.db, &owner_id, &name)
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "repository not found".into()))?;
+
+    // Reject requests for private repos on unauthenticated endpoint
+    if repo.visibility != Visibility::Public {
+        return Err((StatusCode::NOT_FOUND, "repository not found".into()));
+    }
 
     let checks = db::status_check::get_for_commit(&state.db, &repo.id.to_string(), &sha)
         .await

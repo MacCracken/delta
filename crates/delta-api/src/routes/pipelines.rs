@@ -15,13 +15,31 @@ use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/{owner}/{name}/pipelines", get(list_pipelines).post(trigger_pipeline))
+        .route(
+            "/{owner}/{name}/pipelines",
+            get(list_pipelines).post(trigger_pipeline),
+        )
         .route("/{owner}/{name}/pipelines/{pipeline_id}", get(get_pipeline))
-        .route("/{owner}/{name}/pipelines/{pipeline_id}/cancel", axum::routing::post(cancel_pipeline))
-        .route("/{owner}/{name}/pipelines/{pipeline_id}/jobs", get(list_jobs))
-        .route("/{owner}/{name}/pipelines/{pipeline_id}/jobs/{job_id}/logs", get(get_job_logs))
-        .route("/{owner}/{name}/secrets", get(list_secrets).post(set_secret))
-        .route("/{owner}/{name}/secrets/{secret_name}", axum::routing::delete(delete_secret))
+        .route(
+            "/{owner}/{name}/pipelines/{pipeline_id}/cancel",
+            axum::routing::post(cancel_pipeline),
+        )
+        .route(
+            "/{owner}/{name}/pipelines/{pipeline_id}/jobs",
+            get(list_jobs),
+        )
+        .route(
+            "/{owner}/{name}/pipelines/{pipeline_id}/jobs/{job_id}/logs",
+            get(get_job_logs),
+        )
+        .route(
+            "/{owner}/{name}/secrets",
+            get(list_secrets).post(set_secret),
+        )
+        .route(
+            "/{owner}/{name}/secrets/{secret_name}",
+            axum::routing::delete(delete_secret),
+        )
 }
 
 #[derive(Deserialize)]
@@ -30,7 +48,9 @@ struct ListPipelinesQuery {
     #[serde(default = "default_limit")]
     limit: i64,
 }
-fn default_limit() -> i64 { 50 }
+fn default_limit() -> i64 {
+    50
+}
 
 async fn list_pipelines(
     State(state): State<AppState>,
@@ -39,9 +59,14 @@ async fn list_pipelines(
 ) -> Result<Json<Vec<db::pipeline::PipelineRun>>, (StatusCode, String)> {
     let (repo, _) = resolve_repo(&state, &owner, &name).await?;
     let limit = query.limit.clamp(1, 200);
-    let runs = db::pipeline::list_pipelines(&state.db, &repo.id.to_string(), query.status.as_deref(), limit)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let runs = db::pipeline::list_pipelines(
+        &state.db,
+        &repo.id.to_string(),
+        query.status.as_deref(),
+        limit,
+    )
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(runs))
 }
 
@@ -53,7 +78,9 @@ struct TriggerPipelineRequest {
     trigger_type: String,
     trigger_ref: Option<String>,
 }
-fn default_trigger() -> String { "manual".into() }
+fn default_trigger() -> String {
+    "manual".into()
+}
 
 async fn trigger_pipeline(
     State(state): State<AppState>,
@@ -134,11 +161,16 @@ async fn list_secrets(
     let secrets = db::secret::list(&state.db, &repo.id.to_string())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(secrets.into_iter().map(|s| SecretResponse {
-        name: s.name,
-        created_at: s.created_at,
-        updated_at: s.updated_at,
-    }).collect()))
+    Ok(Json(
+        secrets
+            .into_iter()
+            .map(|s| SecretResponse {
+                name: s.name,
+                created_at: s.created_at,
+                updated_at: s.updated_at,
+            })
+            .collect(),
+    ))
 }
 
 #[derive(Serialize)]
@@ -185,4 +217,3 @@ async fn delete_secret(
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
 }
-

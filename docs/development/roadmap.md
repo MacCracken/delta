@@ -26,8 +26,11 @@ Full git push/pull support over HTTP.
 - [x] Push authorization (Basic auth with API tokens)
 - [x] Branch protection rules (pattern matching, PR requirement, force push prevention)
 - [x] Webhook dispatch on push events (async delivery with recording)
+- [x] Webhook SSRF protection (private IP rejection)
 - [x] Branch and tag listing via API (gix)
 - [x] Webhook CRUD API (create, list, delete per repo)
+- [ ] Webhook HTTPS-only enforcement (config flag)
+- [ ] Collaborator access control (push permissions beyond owner)
 - [ ] SSH transport via built-in SSH server
 - [ ] Large file support (LFS-compatible)
 - [ ] Shallow clone and partial clone support
@@ -46,6 +49,9 @@ Pull/merge request workflow with review tooling.
 - [x] Review states (approve, request changes, comment)
 - [x] Merge strategies (merge commit, squash, rebase) via git worktree
 - [x] Status checks (create/update per commit, block merge on failure)
+- [x] Status check visibility enforcement (private repo protection)
+- [x] Audit log authorization (user-scoped access)
+- [x] CORS middleware on API router
 - [x] Branch protection enforcement on merge (required approvals + status checks)
 - [ ] AI-assisted code review summaries
 - [ ] Agent-authored PRs with provenance tracking
@@ -129,6 +135,7 @@ Production readiness, performance, and security hardening.
 - [ ] Backup and disaster recovery
 - [ ] Monitoring and alerting integration
 - [ ] Documentation and API reference
+- [ ] Dependency vulnerability tracking (see [dependency-watch.md](dependency-watch.md))
 
 ---
 

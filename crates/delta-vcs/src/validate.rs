@@ -18,17 +18,20 @@ pub fn validate_ref(name: &str) -> Result<()> {
             "ref name cannot contain '..'".into(),
         ));
     }
-    if name.contains('\0') || name.contains(' ') || name.contains('~') || name.contains('^')
-        || name.contains(':') || name.contains('\\') || name.contains('\x7f')
+    if name.contains('\0')
+        || name.contains(' ')
+        || name.contains('~')
+        || name.contains('^')
+        || name.contains(':')
+        || name.contains('\\')
+        || name.contains('\x7f')
     {
         return Err(DeltaError::InvalidRef(
             "ref name contains invalid characters".into(),
         ));
     }
     if name.ends_with('/') || name.ends_with('.') || name.ends_with(".lock") {
-        return Err(DeltaError::InvalidRef(
-            "ref name has invalid suffix".into(),
-        ));
+        return Err(DeltaError::InvalidRef("ref name has invalid suffix".into()));
     }
     Ok(())
 }
@@ -50,9 +53,7 @@ pub fn validate_name(name: &str) -> Result<()> {
         ));
     }
     if name == "." || name == ".." {
-        return Err(DeltaError::InvalidRef(
-            "name cannot be '.' or '..'".into(),
-        ));
+        return Err(DeltaError::InvalidRef("name cannot be '.' or '..'".into()));
     }
     Ok(())
 }

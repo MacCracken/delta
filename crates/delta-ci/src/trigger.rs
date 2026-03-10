@@ -13,7 +13,10 @@ pub enum Event {
 
 /// Check if a workflow should be triggered by the given event.
 pub fn should_trigger(workflow: &Workflow, event: &Event) -> bool {
-    workflow.on.iter().any(|trigger| matches_trigger(trigger, event))
+    workflow
+        .on
+        .iter()
+        .any(|trigger| matches_trigger(trigger, event))
 }
 
 fn matches_trigger(trigger: &Trigger, event: &Event) -> bool {
@@ -24,9 +27,7 @@ fn matches_trigger(trigger: &Trigger, event: &Event) -> bool {
         (Trigger::PullRequest { branches }, Event::PullRequest { base_branch }) => {
             branches.iter().any(|b| pattern_matches(b, base_branch))
         }
-        (Trigger::Tag { pattern }, Event::Tag { tag_name }) => {
-            pattern_matches(pattern, tag_name)
-        }
+        (Trigger::Tag { pattern }, Event::Tag { tag_name }) => pattern_matches(pattern, tag_name),
         (Trigger::Schedule { .. }, _) => false, // Schedules are handled by cron, not events
         _ => false,
     }
@@ -67,9 +68,24 @@ mod tests {
             jobs: Default::default(),
         };
 
-        assert!(should_trigger(&wf, &Event::Push { branch: "main".into() }));
-        assert!(should_trigger(&wf, &Event::Push { branch: "develop".into() }));
-        assert!(!should_trigger(&wf, &Event::Push { branch: "feature/x".into() }));
+        assert!(should_trigger(
+            &wf,
+            &Event::Push {
+                branch: "main".into()
+            }
+        ));
+        assert!(should_trigger(
+            &wf,
+            &Event::Push {
+                branch: "develop".into()
+            }
+        ));
+        assert!(!should_trigger(
+            &wf,
+            &Event::Push {
+                branch: "feature/x".into()
+            }
+        ));
     }
 
     #[test]
@@ -82,7 +98,17 @@ mod tests {
             jobs: Default::default(),
         };
 
-        assert!(should_trigger(&wf, &Event::Tag { tag_name: "v1.0".into() }));
-        assert!(!should_trigger(&wf, &Event::Tag { tag_name: "release-1".into() }));
+        assert!(should_trigger(
+            &wf,
+            &Event::Tag {
+                tag_name: "v1.0".into()
+            }
+        ));
+        assert!(!should_trigger(
+            &wf,
+            &Event::Tag {
+                tag_name: "release-1".into()
+            }
+        ));
     }
 }

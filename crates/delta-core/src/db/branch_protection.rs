@@ -1,5 +1,5 @@
-use crate::{DeltaError, Result};
 use crate::models::branch_protection::BranchProtection;
+use crate::{DeltaError, Result};
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
@@ -54,13 +54,12 @@ pub async fn create(pool: &SqlitePool, params: CreateParams<'_>) -> Result<Branc
 
 /// Get all branch protections for a repository.
 pub async fn list_for_repo(pool: &SqlitePool, repo_id: &str) -> Result<Vec<BranchProtection>> {
-    let rows = sqlx::query_as::<_, ProtectionRow>(
-        "SELECT * FROM branch_protections WHERE repo_id = ?",
-    )
-    .bind(repo_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| DeltaError::Storage(e.to_string()))?;
+    let rows =
+        sqlx::query_as::<_, ProtectionRow>("SELECT * FROM branch_protections WHERE repo_id = ?")
+            .bind(repo_id)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| DeltaError::Storage(e.to_string()))?;
 
     Ok(rows.into_iter().map(|r| r.into_protection()).collect())
 }

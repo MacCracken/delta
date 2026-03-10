@@ -33,17 +33,15 @@ pub async fn create(
 ) -> Result<String> {
     let id = Uuid::new_v4().to_string();
 
-    sqlx::query(
-        "INSERT INTO webhooks (id, repo_id, url, secret, events) VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(repo_id)
-    .bind(url)
-    .bind(secret)
-    .bind(events)
-    .execute(pool)
-    .await
-    .map_err(|e| DeltaError::Storage(e.to_string()))?;
+    sqlx::query("INSERT INTO webhooks (id, repo_id, url, secret, events) VALUES (?, ?, ?, ?, ?)")
+        .bind(&id)
+        .bind(repo_id)
+        .bind(url)
+        .bind(secret)
+        .bind(events)
+        .execute(pool)
+        .await
+        .map_err(|e| DeltaError::Storage(e.to_string()))?;
 
     Ok(id)
 }

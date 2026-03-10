@@ -10,10 +10,22 @@ pub mod repos;
 pub mod status_checks;
 pub mod webhooks;
 
-use axum::Router;
 use crate::state::AppState;
+use axum::Router;
+use tower_http::cors::{Any, CorsLayer};
 
 pub fn router(state: AppState) -> Router {
+    let cors = CorsLayer::new()
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::PUT,
+            axum::http::Method::PATCH,
+            axum::http::Method::DELETE,
+        ])
+        .allow_headers(Any)
+        .allow_origin(Any);
+
     Router::new()
         .nest("/health", health::router())
         .nest("/api/v1/auth", auth::router())
@@ -27,5 +39,6 @@ pub fn router(state: AppState) -> Router {
         .nest("/api/v1/audit", audit::router())
         // Git smart HTTP — no prefix, matches /{owner}/{name}.git/...
         .merge(git::router())
+        .layer(cors)
         .with_state(state)
 }

@@ -29,6 +29,7 @@ base64 = { workspace = true }
 blake3 = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true }
+url = { workspace = true }
 bytes = { workspace = true }
 
 [dev-dependencies]

@@ -23,9 +23,7 @@ pub fn list_branches(repo_path: &Path) -> Result<Vec<BranchInfo>> {
         .map_err(|e| DeltaError::Storage(format!("failed to open repo: {}", e)))?;
 
     let head_ref = repo.head_ref().ok().flatten();
-    let head_name = head_ref
-        .as_ref()
-        .map(|r| r.name().shorten().to_string());
+    let head_name = head_ref.as_ref().map(|r| r.name().shorten().to_string());
 
     let refs = repo
         .references()
@@ -38,10 +36,7 @@ pub fn list_branches(repo_path: &Path) -> Result<Vec<BranchInfo>> {
     let mut result = Vec::new();
     for reference in branches.flatten() {
         let name = reference.name().shorten().to_string();
-        let commit_id = reference
-            .id()
-            .to_hex()
-            .to_string();
+        let commit_id = reference.id().to_hex().to_string();
         let is_default = head_name.as_deref() == Some(name.as_str());
         result.push(BranchInfo {
             name,
@@ -69,10 +64,7 @@ pub fn list_tags(repo_path: &Path) -> Result<Vec<TagInfo>> {
     let mut result = Vec::new();
     for reference in tags.flatten() {
         let name = reference.name().shorten().to_string();
-        let target_id = reference
-            .id()
-            .to_hex()
-            .to_string();
+        let target_id = reference.id().to_hex().to_string();
         result.push(TagInfo { name, target_id });
     }
 

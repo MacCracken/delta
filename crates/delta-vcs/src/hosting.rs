@@ -40,7 +40,9 @@ impl RepoHost {
 
     /// Check if a repository exists on disk.
     pub fn exists(&self, owner: &str, name: &str) -> bool {
-        self.repo_path(owner, name).map(|p| p.exists()).unwrap_or(false)
+        self.repo_path(owner, name)
+            .map(|p| p.exists())
+            .unwrap_or(false)
     }
 
     /// Delete a repository from disk.

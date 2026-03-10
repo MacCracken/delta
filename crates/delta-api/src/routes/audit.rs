@@ -25,17 +25,31 @@ struct AuditQuery {
     #[serde(default)]
     offset: i64,
 }
-fn default_limit() -> i64 { 100 }
+fn default_limit() -> i64 {
+    100
+}
 
 async fn list_audit_log(
     State(state): State<AppState>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
     Query(query): Query<AuditQuery>,
 ) -> Result<Json<Vec<db::audit::AuditEntry>>, (StatusCode, String)> {
+    let own_id = user.id.to_string();
+
+    // Users can only view their own audit logs
+    if let Some(ref requested_id) = query.user_id
+        && *requested_id != own_id
+    {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "cannot view another user's audit log".into(),
+        ));
+    }
+
     let limit = query.limit.clamp(1, 500);
     let entries = db::audit::list(
         &state.db,
-        query.user_id.as_deref(),
+        Some(&own_id),
         query.resource_type.as_deref(),
         limit,
         query.offset.max(0),

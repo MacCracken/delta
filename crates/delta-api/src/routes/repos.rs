@@ -14,7 +14,10 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_repos).post(create_repo))
-        .route("/{owner}/{name}", get(get_repo).put(update_repo).delete(delete_repo))
+        .route(
+            "/{owner}/{name}",
+            get(get_repo).put(update_repo).delete(delete_repo),
+        )
 }
 
 #[derive(Serialize)]
@@ -90,7 +93,10 @@ async fn create_repo(
         || req.name.len() > 100
         || req.name.starts_with('-')
         || req.name.starts_with('.')
-        || !req.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+        || !req
+            .name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
     {
         return Err((StatusCode::BAD_REQUEST, "invalid repository name".into()));
     }
@@ -135,13 +141,21 @@ async fn get_repo(
     let owner_id = owner_user.id.to_string();
     let repo = db::repo::get_by_owner_and_name(&state.db, &owner_id, &name)
         .await
-        .map_err(|_| (StatusCode::NOT_FOUND, format!("repository '{}/{}' not found", owner, name)))?;
+        .map_err(|_| {
+            (
+                StatusCode::NOT_FOUND,
+                format!("repository '{}/{}' not found", owner, name),
+            )
+        })?;
 
     // Check visibility
     if repo.visibility == Visibility::Private {
         let is_owner = user.as_ref().is_some_and(|u| u.id == owner_user.id);
         if !is_owner {
-            return Err((StatusCode::NOT_FOUND, format!("repository '{}/{}' not found", owner, name)));
+            return Err((
+                StatusCode::NOT_FOUND,
+                format!("repository '{}/{}' not found", owner, name),
+            ));
         }
     }
 

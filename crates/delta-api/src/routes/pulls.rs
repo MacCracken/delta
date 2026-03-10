@@ -19,9 +19,18 @@ pub fn router() -> Router<AppState> {
             "/{owner}/{name}/pulls/{number}",
             get(get_pull).put(update_pull),
         )
-        .route("/{owner}/{name}/pulls/{number}/merge", axum::routing::post(merge_pull))
-        .route("/{owner}/{name}/pulls/{number}/close", axum::routing::post(close_pull))
-        .route("/{owner}/{name}/pulls/{number}/reopen", axum::routing::post(reopen_pull))
+        .route(
+            "/{owner}/{name}/pulls/{number}/merge",
+            axum::routing::post(merge_pull),
+        )
+        .route(
+            "/{owner}/{name}/pulls/{number}/close",
+            axum::routing::post(close_pull),
+        )
+        .route(
+            "/{owner}/{name}/pulls/{number}/reopen",
+            axum::routing::post(reopen_pull),
+        )
         .route("/{owner}/{name}/pulls/{number}/diff", get(get_diff))
         .route("/{owner}/{name}/pulls/{number}/commits", get(get_commits))
         .route(
@@ -74,9 +83,7 @@ impl PrResponse {
 
         let state_str = pr.state.as_str().to_string();
 
-        let strategy_str = pr.merge_strategy.map(|s| {
-            s.as_str().to_string()
-        });
+        let strategy_str = pr.merge_strategy.map(|s| s.as_str().to_string());
 
         PrResponse {
             id: pr.id.to_string(),
@@ -167,7 +174,9 @@ async fn create_pull(
     let user_id = user.id.to_string();
 
     // Get head SHA if possible
-    let repo_path = state.repo_host.repo_path(&owner, &name)
+    let repo_path = state
+        .repo_host
+        .repo_path(&owner, &name)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     let head_sha = delta_vcs::refs::list_branches(&repo_path)
         .ok()
@@ -194,7 +203,10 @@ async fn create_pull(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok((StatusCode::CREATED, Json(PrResponse::from_pr(pr, &state.db).await)))
+    Ok((
+        StatusCode::CREATED,
+        Json(PrResponse::from_pr(pr, &state.db).await),
+    ))
 }
 
 async fn get_pull(
@@ -269,7 +281,10 @@ async fn merge_pull(
 
     // Only repo owner can merge (for now)
     if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "only the repo owner can merge".into()));
+        return Err((
+            StatusCode::FORBIDDEN,
+            "only the repo owner can merge".into(),
+        ));
     }
 
     let pr = db::pull_request::get_by_number(&state.db, &repo_id, number)
@@ -317,7 +332,9 @@ async fn merge_pull(
     }
 
     // Execute the merge
-    let repo_path = state.repo_host.repo_path(&owner, &name)
+    let repo_path = state
+        .repo_host
+        .repo_path(&owner, &name)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     let merge_mode = match req.strategy.as_str() {
         "squash" => delta_vcs::merge::MergeMode::Squash,
@@ -406,7 +423,14 @@ async fn reopen_pull(
 async fn get_diff(
     State(state): State<AppState>,
     Path((owner, name, number)): Path<(String, String, i64)>,
-) -> Result<(StatusCode, [(axum::http::HeaderName, &'static str); 1], String), (StatusCode, String)> {
+) -> Result<
+    (
+        StatusCode,
+        [(axum::http::HeaderName, &'static str); 1],
+        String,
+    ),
+    (StatusCode, String),
+> {
     let (repo, _) = resolve_repo(&state, &owner, &name).await?;
     let repo_id = repo.id.to_string();
 
@@ -414,7 +438,9 @@ async fn get_diff(
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
 
-    let repo_path = state.repo_host.repo_path(&owner, &name)
+    let repo_path = state
+        .repo_host
+        .repo_path(&owner, &name)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     let diff = delta_vcs::diff::diff_refs(&repo_path, &pr.base_branch, &pr.head_branch)
         .await
@@ -438,7 +464,9 @@ async fn get_commits(
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
 
-    let repo_path = state.repo_host.repo_path(&owner, &name)
+    let repo_path = state
+        .repo_host
+        .repo_path(&owner, &name)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     let commits = delta_vcs::diff::list_commits(&repo_path, &pr.base_branch, &pr.head_branch)
         .await
@@ -587,7 +615,10 @@ async fn submit_review(
 
     // Can't review your own PR
     if pr.author_id == user.id {
-        return Err((StatusCode::CONFLICT, "cannot review your own pull request".into()));
+        return Err((
+            StatusCode::CONFLICT,
+            "cannot review your own pull request".into(),
+        ));
     }
 
     let review_state = match req.state.as_str() {

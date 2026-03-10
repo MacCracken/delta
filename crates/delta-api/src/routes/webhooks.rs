@@ -11,7 +11,10 @@ use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/{owner}/{name}/webhooks", get(list_webhooks).post(create_webhook))
+        .route(
+            "/{owner}/{name}/webhooks",
+            get(list_webhooks).post(create_webhook),
+        )
         .route(
             "/{owner}/{name}/webhooks/{webhook_id}",
             axum::routing::delete(delete_webhook),
@@ -34,10 +37,9 @@ async fn list_webhooks(
 ) -> Result<Json<Vec<WebhookResponse>>, (StatusCode, String)> {
     let (repo, _) = resolve_owned_repo(&state, &owner, &name, &user).await?;
 
-    let webhooks =
-        delta_core::db::webhook::list_for_repo(&state.db, &repo.id.to_string())
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let webhooks = delta_core::db::webhook::list_for_repo(&state.db, &repo.id.to_string())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(
         webhooks
@@ -76,8 +78,8 @@ async fn create_webhook(
 ) -> Result<(StatusCode, Json<WebhookResponse>), (StatusCode, String)> {
     let (repo, _) = resolve_owned_repo(&state, &owner, &name, &user).await?;
 
-    let events_json = serde_json::to_string(&req.events)
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let events_json =
+        serde_json::to_string(&req.events).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 
     let id = delta_core::db::webhook::create(
         &state.db,
@@ -121,8 +123,13 @@ async fn resolve_owned_repo(
     owner: &str,
     name: &str,
     user: &delta_core::models::user::User,
-) -> Result<(delta_core::models::repo::Repository, delta_core::models::user::User), (StatusCode, String)>
-{
+) -> Result<
+    (
+        delta_core::models::repo::Repository,
+        delta_core::models::user::User,
+    ),
+    (StatusCode, String),
+> {
     let owner_user = delta_core::db::user::get_by_username(&state.db, owner)
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "user not found".into()))?;

@@ -122,10 +122,12 @@ pub async fn get_by_token_hash(pool: &SqlitePool, token_hash: &str) -> Result<Op
 
     if let Some(row) = row {
         // Update last_used_at
-        let _ = sqlx::query("UPDATE api_tokens SET last_used_at = datetime('now') WHERE token_hash = ?")
-            .bind(token_hash)
-            .execute(pool)
-            .await;
+        let _ = sqlx::query(
+            "UPDATE api_tokens SET last_used_at = datetime('now') WHERE token_hash = ?",
+        )
+        .bind(token_hash)
+        .execute(pool)
+        .await;
 
         Ok(Some(row.into_user()))
     } else {
@@ -135,13 +137,12 @@ pub async fn get_by_token_hash(pool: &SqlitePool, token_hash: &str) -> Result<Op
 
 /// Delete an API token.
 pub async fn delete_token(pool: &SqlitePool, token_id: &str, user_id: &str) -> Result<()> {
-    let result =
-        sqlx::query("DELETE FROM api_tokens WHERE id = ? AND user_id = ?")
-            .bind(token_id)
-            .bind(user_id)
-            .execute(pool)
-            .await
-            .map_err(|e| DeltaError::Storage(e.to_string()))?;
+    let result = sqlx::query("DELETE FROM api_tokens WHERE id = ? AND user_id = ?")
+        .bind(token_id)
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .map_err(|e| DeltaError::Storage(e.to_string()))?;
 
     if result.rows_affected() == 0 {
         return Err(DeltaError::AuthFailed("token not found".into()));

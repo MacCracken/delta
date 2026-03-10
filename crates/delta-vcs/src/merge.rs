@@ -24,7 +24,8 @@ pub async fn execute_merge(
     let tmp_dir = tempfile::tempdir()
         .map_err(|e| DeltaError::Storage(format!("failed to create temp dir: {}", e)))?;
     let worktree_path = tmp_dir.path().join("merge-worktree");
-    let worktree_str = worktree_path.to_str()
+    let worktree_str = worktree_path
+        .to_str()
         .ok_or_else(|| DeltaError::Storage("worktree path is not valid UTF-8".into()))?;
 
     // Add worktree at the base branch
@@ -65,9 +66,7 @@ async fn do_merge(
             run_git_in(worktree, &["merge", "--squash", head_branch]).await?;
             run_git_in(worktree, &["commit", "-m", message]).await
         }
-        MergeMode::Rebase => {
-            run_git_in(worktree, &["rebase", head_branch]).await
-        }
+        MergeMode::Rebase => run_git_in(worktree, &["rebase", head_branch]).await,
     }
 }
 

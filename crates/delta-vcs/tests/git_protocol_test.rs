@@ -131,8 +131,7 @@ async fn test_advertise_refs_on_bare_repo() {
     let host = RepoHost::new(tmp.path());
     let path = host.init_bare("alice", "testrepo").unwrap();
 
-    let result =
-        delta_vcs::protocol::advertise_refs(&path, "git-upload-pack").await;
+    let result = delta_vcs::protocol::advertise_refs(&path, "git-upload-pack").await;
     // Should succeed even on empty repo
     assert!(result.is_ok());
     let body = result.unwrap();
@@ -146,7 +145,6 @@ async fn test_advertise_refs_invalid_service() {
     let host = RepoHost::new(tmp.path());
     let path = host.init_bare("alice", "testrepo").unwrap();
 
-    let result =
-        delta_vcs::protocol::advertise_refs(&path, "git-evil-command").await;
+    let result = delta_vcs::protocol::advertise_refs(&path, "git-evil-command").await;
     assert!(result.is_err());
 }

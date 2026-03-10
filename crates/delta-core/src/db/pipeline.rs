@@ -179,11 +179,7 @@ pub async fn update_pipeline_status(
     get_pipeline(pool, id).await
 }
 
-pub async fn create_job(
-    pool: &SqlitePool,
-    pipeline_id: &str,
-    job_name: &str,
-) -> Result<JobRun> {
+pub async fn create_job(pool: &SqlitePool, pipeline_id: &str, job_name: &str) -> Result<JobRun> {
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
 

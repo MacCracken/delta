@@ -25,8 +25,7 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
 pub fn generate_token() -> Result<(String, String)> {
     use base64::Engine;
     let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes)
-        .map_err(|e| DeltaError::Storage(format!("RNG failure: {}", e)))?;
+    getrandom::fill(&mut bytes).map_err(|e| DeltaError::Storage(format!("RNG failure: {}", e)))?;
     let raw = format!(
         "delta_{}",
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes),
@@ -84,7 +83,15 @@ pub async fn login(
 
     let (raw_token, token_hash) = generate_token()?;
     let expires_at = compute_expiry(token_expiry_secs);
-    db::user::create_token(pool, &user_id, "login", &token_hash, "*", expires_at.as_deref()).await?;
+    db::user::create_token(
+        pool,
+        &user_id,
+        "login",
+        &token_hash,
+        "*",
+        expires_at.as_deref(),
+    )
+    .await?;
 
     let user = db::user::get_by_id(pool, &user_id).await?;
     Ok((user, raw_token))

@@ -4,7 +4,10 @@ use delta_core::{DeltaConfig, db};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
-#[command(name = "delta", about = "Delta — code hosting, CI/CD, and artifact registry")]
+#[command(
+    name = "delta",
+    about = "Delta — code hosting, CI/CD, and artifact registry"
+)]
 struct Cli {
     /// Config file path
     #[arg(short, long, default_value = "/etc/delta/config.toml")]

@@ -40,9 +40,7 @@ async fn test_get_user_by_username() {
     let pool = setup_pool().await;
     create_test_user(&pool).await;
 
-    let user = db::user::get_by_username(&pool, "testuser")
-        .await
-        .unwrap();
+    let user = db::user::get_by_username(&pool, "testuser").await.unwrap();
     assert_eq!(user.email, "test@example.com");
 }
 
@@ -61,9 +59,15 @@ async fn test_create_and_get_repo() {
     let user = create_test_user(&pool).await;
     let uid = user.id.to_string();
 
-    let repo = db::repo::create(&pool, &uid, "myrepo", Some("A test repo"), Visibility::Public)
-        .await
-        .unwrap();
+    let repo = db::repo::create(
+        &pool,
+        &uid,
+        "myrepo",
+        Some("A test repo"),
+        Visibility::Public,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(repo.name, "myrepo");
     assert_eq!(repo.description.as_deref(), Some("A test repo"));
@@ -206,9 +210,7 @@ async fn test_api_token_lifecycle() {
     assert_eq!(found.unwrap().username, "testuser");
 
     // Invalid hash returns None
-    let not_found = db::user::get_by_token_hash(&pool, "badhash")
-        .await
-        .unwrap();
+    let not_found = db::user::get_by_token_hash(&pool, "badhash").await.unwrap();
     assert!(not_found.is_none());
 
     // Delete token

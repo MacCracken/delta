@@ -68,16 +68,14 @@ pub async fn get(pool: &SqlitePool, id: &str) -> Result<Release> {
 }
 
 pub async fn get_by_tag(pool: &SqlitePool, repo_id: &str, tag_name: &str) -> Result<Release> {
-    sqlx::query_as::<_, ReleaseRow>(
-        "SELECT * FROM releases WHERE repo_id = ? AND tag_name = ?",
-    )
-    .bind(repo_id)
-    .bind(tag_name)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| DeltaError::Registry(e.to_string()))?
-    .map(|r| r.into_release())
-    .ok_or_else(|| DeltaError::Registry(format!("release '{}' not found", tag_name)))
+    sqlx::query_as::<_, ReleaseRow>("SELECT * FROM releases WHERE repo_id = ? AND tag_name = ?")
+        .bind(repo_id)
+        .bind(tag_name)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| DeltaError::Registry(e.to_string()))?
+        .map(|r| r.into_release())
+        .ok_or_else(|| DeltaError::Registry(format!("release '{}' not found", tag_name)))
 }
 
 pub async fn list_for_repo(pool: &SqlitePool, repo_id: &str) -> Result<Vec<Release>> {
@@ -110,14 +108,16 @@ pub async fn attach_asset(
     label: Option<&str>,
 ) -> Result<()> {
     let id = Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO release_assets (id, release_id, artifact_id, label) VALUES (?, ?, ?, ?)")
-        .bind(&id)
-        .bind(release_id)
-        .bind(artifact_id)
-        .bind(label)
-        .execute(pool)
-        .await
-        .map_err(|e| DeltaError::Registry(e.to_string()))?;
+    sqlx::query(
+        "INSERT INTO release_assets (id, release_id, artifact_id, label) VALUES (?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(release_id)
+    .bind(artifact_id)
+    .bind(label)
+    .execute(pool)
+    .await
+    .map_err(|e| DeltaError::Registry(e.to_string()))?;
     Ok(())
 }
 

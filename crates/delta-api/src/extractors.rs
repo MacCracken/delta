@@ -4,8 +4,8 @@ use axum::{
 };
 use delta_core::models::user::User;
 
-use crate::state::AppState;
 use crate::auth;
+use crate::state::AppState;
 
 /// Extractor that authenticates the request via Bearer token.
 /// Rejects with 401 if no valid token is provided.

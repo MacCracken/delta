@@ -40,7 +40,9 @@ async fn info_refs(
     headers: HeaderMap,
 ) -> Result<Response, (StatusCode, String)> {
     // Check repo exists
-    let repo_path = state.repo_host.repo_path(&owner, &name)
+    let repo_path = state
+        .repo_host
+        .repo_path(&owner, &name)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     if !repo_path.exists() {
         return Err((StatusCode::NOT_FOUND, "repository not found".into()));
@@ -78,7 +80,9 @@ async fn upload_pack(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, (StatusCode, String)> {
-    let repo_path = state.repo_host.repo_path(&owner, &name)
+    let repo_path = state
+        .repo_host
+        .repo_path(&owner, &name)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     if !repo_path.exists() {
         return Err((StatusCode::NOT_FOUND, "repository not found".into()));
@@ -107,7 +111,9 @@ async fn receive_pack(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, (StatusCode, String)> {
-    let repo_path = state.repo_host.repo_path(&owner, &name)
+    let repo_path = state
+        .repo_host
+        .repo_path(&owner, &name)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     if !repo_path.exists() {
         return Err((StatusCode::NOT_FOUND, "repository not found".into()));
@@ -159,11 +165,8 @@ async fn authenticate_git_request(
         .strip_prefix("Basic ")
         .ok_or("invalid auth format — use Basic auth with token as password")?;
 
-    let decoded = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        credentials,
-    )
-    .map_err(|_| "invalid base64 credentials".to_string())?;
+    let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, credentials)
+        .map_err(|_| "invalid base64 credentials".to_string())?;
 
     let decoded_str =
         String::from_utf8(decoded).map_err(|_| "invalid utf-8 credentials".to_string())?;
@@ -202,7 +205,8 @@ async fn check_read_access(
 
     if let Ok(owner_user) = owner_user {
         let owner_id = owner_user.id.to_string();
-        if let Ok(repo) = delta_core::db::repo::get_by_owner_and_name(&state.db, &owner_id, name).await
+        if let Ok(repo) =
+            delta_core::db::repo::get_by_owner_and_name(&state.db, &owner_id, name).await
             && repo.visibility == delta_core::models::repo::Visibility::Public
         {
             return Ok(());
@@ -246,13 +250,39 @@ async fn dispatch_push_webhooks(
         .timeout(std::time::Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap_or_default();
+        .map_err(|e| delta_core::DeltaError::Storage(format!("HTTP client error: {e}")))?;
 
     for webhook in webhooks {
-        // Validate webhook URL: must be HTTP(S), reject private IPs
+        // Validate webhook URL: must be HTTP(S)
         if !webhook.url.starts_with("https://") && !webhook.url.starts_with("http://") {
             tracing::warn!(webhook_id = %webhook.id, "skipping webhook with non-HTTP URL");
             continue;
+        }
+
+        // Reject private/internal IPs to prevent SSRF
+        if let Ok(url) = url::Url::parse(&webhook.url)
+            && let Some(host) = url.host_str()
+        {
+            let is_private = host == "localhost"
+                || host == "127.0.0.1"
+                || host == "::1"
+                || host == "0.0.0.0"
+                || host.starts_with("10.")
+                || host.starts_with("172.16.")
+                || host.starts_with("172.17.")
+                || host.starts_with("172.18.")
+                || host.starts_with("172.19.")
+                || host.starts_with("172.2")
+                || host.starts_with("172.30.")
+                || host.starts_with("172.31.")
+                || host.starts_with("192.168.")
+                || host.starts_with("169.254.")
+                || host.ends_with(".local")
+                || host.ends_with(".internal");
+            if is_private {
+                tracing::warn!(webhook_id = %webhook.id, "skipping webhook targeting private network");
+                continue;
+            }
         }
 
         // Compute HMAC signature if webhook has a secret
@@ -272,15 +302,12 @@ async fn dispatch_push_webhooks(
             req_builder = req_builder.header("X-Delta-Signature", sig.as_str());
         }
 
-        let resp = req_builder
-            .body(payload_str.clone())
-            .send()
-            .await;
+        let resp = req_builder.body(payload_str.clone()).send().await;
 
         let (status, body) = match resp {
             Ok(r) => {
                 let status = r.status().as_u16() as i32;
-                let body = r.text().await.unwrap_or_default();
+                let body = r.text().await.unwrap_or_else(|e| e.to_string());
                 (Some(status), Some(body))
             }
             Err(e) => {
