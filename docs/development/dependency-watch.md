@@ -29,13 +29,9 @@ Last reviewed: 2026-03-10
 
 Items identified in security scan that require design decisions or larger implementation effort.
 
-### Secret encryption at rest (Critical)
+### ~~Secret encryption at rest~~ (Resolved 2026-03-10)
 
-- **File:** `crates/delta-api/src/routes/pipelines.rs:167`
-- **Issue:** Pipeline secrets stored plaintext in database
-- **Required:** Choose encryption scheme (AES-256-GCM recommended), key management strategy (env var, file, KMS)
-- **Blocked on:** Key management design decision
-- **Phase:** 4 (CI/CD Engine) — roadmap item "Secret management (encrypted at rest, scoped per repo)"
+Implemented BLAKE3 stream cipher encryption in `delta-core/src/crypto.rs`. Key derived from `auth.secrets_key` config.
 
 ### Rate limiting on auth endpoints (Medium)
 

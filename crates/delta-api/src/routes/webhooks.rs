@@ -78,6 +78,20 @@ async fn create_webhook(
 ) -> Result<(StatusCode, Json<WebhookResponse>), (StatusCode, String)> {
     let (repo, _) = resolve_owned_repo(&state, &owner, &name, &user).await?;
 
+    // Validate webhook URL: must be HTTP(S) and not target private networks
+    if !req.url.starts_with("https://") && !req.url.starts_with("http://") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "webhook URL must use http or https".into(),
+        ));
+    }
+    if crate::routes::git::is_private_url(&req.url) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "webhook URL must not target private networks".into(),
+        ));
+    }
+
     let events_json =
         serde_json::to_string(&req.events).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 

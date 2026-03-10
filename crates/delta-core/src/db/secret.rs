@@ -68,6 +68,22 @@ pub async fn list(pool: &SqlitePool, repo_id: &str) -> Result<Vec<RepoSecret>> {
         .collect())
 }
 
+/// Fetch all secrets for a repo with their encrypted values (for pipeline execution).
+pub async fn get_all_values(pool: &SqlitePool, repo_id: &str) -> Result<Vec<(String, String)>> {
+    let rows = sqlx::query_as::<_, SecretValueRow>(
+        "SELECT name, encrypted_value FROM repo_secrets WHERE repo_id = ? ORDER BY name",
+    )
+    .bind(repo_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| DeltaError::Storage(e.to_string()))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.name, r.encrypted_value))
+        .collect())
+}
+
 pub async fn delete(pool: &SqlitePool, repo_id: &str, name: &str) -> Result<()> {
     let result = sqlx::query("DELETE FROM repo_secrets WHERE repo_id = ? AND name = ?")
         .bind(repo_id)
@@ -92,4 +108,10 @@ struct SecretRow {
     name: String,
     created_at: String,
     updated_at: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct SecretValueRow {
+    name: String,
+    encrypted_value: String,
 }

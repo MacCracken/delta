@@ -71,6 +71,14 @@ pub fn list_tags(repo_path: &Path) -> Result<Vec<TagInfo>> {
     Ok(result)
 }
 
+/// Get the branch name that HEAD points to (e.g. "main").
+/// Returns None for empty repos or detached HEAD.
+pub fn head_branch(repo_path: &Path) -> Option<String> {
+    let repo = gix::open(repo_path).ok()?;
+    let head_ref = repo.head_ref().ok()??;
+    Some(head_ref.name().shorten().to_string())
+}
+
 /// Get the commit ID that HEAD points to, if any.
 pub fn head_commit(repo_path: &Path) -> Result<Option<String>> {
     let repo = gix::open(repo_path)

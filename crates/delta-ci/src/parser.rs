@@ -18,10 +18,19 @@ pub fn load_workflows(repo_path: &Path) -> Vec<(String, Workflow)> {
         return vec![];
     }
 
+    const MAX_WORKFLOW_SIZE: u64 = 1_048_576; // 1 MB
+
     let mut workflows = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&workflows_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
+            // Skip files larger than 1 MB to prevent DoS
+            if let Ok(meta) = path.metadata()
+                && meta.len() > MAX_WORKFLOW_SIZE
+            {
+                tracing::warn!(path = %path.display(), "skipping oversized workflow file");
+                continue;
+            }
             if path.extension().is_some_and(|e| e == "toml")
                 && let Ok(content) = std::fs::read_to_string(&path)
             {

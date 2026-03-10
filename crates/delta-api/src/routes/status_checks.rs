@@ -49,7 +49,13 @@ async fn list_statuses(
 
     let checks = db::status_check::get_for_commit(&state.db, &repo.id.to_string(), &sha)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("failed to fetch status checks: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
 
     Ok(Json(
         checks
@@ -78,12 +84,15 @@ struct CreateStatusRequest {
 async fn create_status(
     State(state): State<AppState>,
     Path((owner, name, sha)): Path<(String, String, String)>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
     Json(req): Json<CreateStatusRequest>,
 ) -> Result<(StatusCode, Json<StatusResponse>), (StatusCode, String)> {
     let owner_user = db::user::get_by_username(&state.db, &owner)
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "user not found".into()))?;
+    if user.id != owner_user.id {
+        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
+    }
     let owner_id = owner_user.id.to_string();
     let repo = db::repo::get_by_owner_and_name(&state.db, &owner_id, &name)
         .await

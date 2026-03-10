@@ -384,3 +384,36 @@ struct StepLogRow {
     started_at: Option<String>,
     finished_at: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_run_status_roundtrip() {
+        for status in [
+            RunStatus::Queued,
+            RunStatus::Running,
+            RunStatus::Passed,
+            RunStatus::Failed,
+            RunStatus::Cancelled,
+        ] {
+            assert_eq!(RunStatus::parse(status.as_str()), status);
+        }
+    }
+
+    #[test]
+    fn test_run_status_parse_unknown() {
+        assert_eq!(RunStatus::parse("unknown"), RunStatus::Queued);
+        assert_eq!(RunStatus::parse(""), RunStatus::Queued);
+    }
+
+    #[test]
+    fn test_run_status_as_str() {
+        assert_eq!(RunStatus::Queued.as_str(), "queued");
+        assert_eq!(RunStatus::Running.as_str(), "running");
+        assert_eq!(RunStatus::Passed.as_str(), "passed");
+        assert_eq!(RunStatus::Failed.as_str(), "failed");
+        assert_eq!(RunStatus::Cancelled.as_str(), "cancelled");
+    }
+}

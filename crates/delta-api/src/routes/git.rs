@@ -128,14 +128,27 @@ async fn receive_pack(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Fire webhooks asynchronously
+    // Fire webhooks and trigger pipelines asynchronously
     let db = state.db.clone();
     let owner_clone = owner.clone();
     let name_clone = name.clone();
     let pusher = user;
+    let repo_path_clone = repo_path.clone();
+    let secrets_key = state.config.auth.secrets_key.clone();
     tokio::spawn(async move {
         if let Err(e) = dispatch_push_webhooks(&db, &owner_clone, &name_clone, &pusher).await {
             tracing::warn!("webhook dispatch failed: {}", e);
+        }
+        if let Err(e) = dispatch_push_pipelines(
+            &db,
+            &owner_clone,
+            &name_clone,
+            &repo_path_clone,
+            &secrets_key,
+        )
+        .await
+        {
+            tracing::warn!("pipeline dispatch failed: {}", e);
         }
     });
 
@@ -220,6 +233,41 @@ async fn check_read_access(
         .map_err(|e| (StatusCode::UNAUTHORIZED, e))
 }
 
+/// Check if a host is in the 172.16.0.0/12 private range (172.16.x - 172.31.x).
+fn is_private_172(host: &str) -> bool {
+    if let Some(rest) = host.strip_prefix("172.")
+        && let Some(octet_str) = rest.split('.').next()
+        && let Ok(octet) = octet_str.parse::<u8>()
+    {
+        return (16..=31).contains(&octet);
+    }
+    false
+}
+
+/// Check if a URL targets a private/internal network (SSRF protection).
+pub fn is_private_url(url_str: &str) -> bool {
+    let Ok(url) = url::Url::parse(url_str) else {
+        return true; // Reject unparseable URLs
+    };
+    let Some(host) = url.host_str() else {
+        return true;
+    };
+    host == "localhost"
+        || host == "127.0.0.1"
+        || host == "::1"
+        || host == "[::1]"
+        || host == "0.0.0.0"
+        || host.starts_with("10.")
+        || host.starts_with("192.168.")
+        || host.starts_with("169.254.")
+        || host.starts_with("fe80:")
+        || host.starts_with("fc00:")
+        || host.starts_with("fd")
+        || is_private_172(host)
+        || host.ends_with(".local")
+        || host.ends_with(".internal")
+}
+
 /// Dispatch push webhooks for a repository.
 async fn dispatch_push_webhooks(
     db: &sqlx::SqlitePool,
@@ -253,36 +301,14 @@ async fn dispatch_push_webhooks(
         .map_err(|e| delta_core::DeltaError::Storage(format!("HTTP client error: {e}")))?;
 
     for webhook in webhooks {
-        // Validate webhook URL: must be HTTP(S)
+        // Validate webhook URL: must be HTTP(S) and not target private networks
         if !webhook.url.starts_with("https://") && !webhook.url.starts_with("http://") {
             tracing::warn!(webhook_id = %webhook.id, "skipping webhook with non-HTTP URL");
             continue;
         }
-
-        // Reject private/internal IPs to prevent SSRF
-        if let Ok(url) = url::Url::parse(&webhook.url)
-            && let Some(host) = url.host_str()
-        {
-            let is_private = host == "localhost"
-                || host == "127.0.0.1"
-                || host == "::1"
-                || host == "0.0.0.0"
-                || host.starts_with("10.")
-                || host.starts_with("172.16.")
-                || host.starts_with("172.17.")
-                || host.starts_with("172.18.")
-                || host.starts_with("172.19.")
-                || host.starts_with("172.2")
-                || host.starts_with("172.30.")
-                || host.starts_with("172.31.")
-                || host.starts_with("192.168.")
-                || host.starts_with("169.254.")
-                || host.ends_with(".local")
-                || host.ends_with(".internal");
-            if is_private {
-                tracing::warn!(webhook_id = %webhook.id, "skipping webhook targeting private network");
-                continue;
-            }
+        if is_private_url(&webhook.url) {
+            tracing::warn!(webhook_id = %webhook.id, "skipping webhook targeting private network");
+            continue;
         }
 
         // Compute HMAC signature if webhook has a secret
@@ -327,5 +353,58 @@ async fn dispatch_push_webhooks(
         .await;
     }
 
+    Ok(())
+}
+
+/// Trigger CI/CD pipelines for a push event.
+async fn dispatch_push_pipelines(
+    db: &sqlx::SqlitePool,
+    owner: &str,
+    name: &str,
+    repo_path: &std::path::Path,
+    secrets_key: &str,
+) -> std::result::Result<(), String> {
+    // Resolve repo
+    let owner_user = delta_core::db::user::get_by_username(db, owner)
+        .await
+        .map_err(|e| format!("failed to resolve owner: {e}"))?;
+    let owner_id = owner_user.id.to_string();
+    let repo = delta_core::db::repo::get_by_owner_and_name(db, &owner_id, name)
+        .await
+        .map_err(|e| format!("failed to resolve repo: {e}"))?;
+    let repo_id = repo.id.to_string();
+
+    // Get HEAD branch name
+    let branch = delta_vcs::refs::head_branch(repo_path).unwrap_or_else(|| "main".into());
+
+    // Get HEAD commit SHA
+    let commit_sha = delta_vcs::refs::head_commit(repo_path)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
+    if commit_sha.is_empty() {
+        return Ok(());
+    }
+
+    // Decrypt repo secrets for pipeline env
+    let encryption_key = delta_core::crypto::derive_key(secrets_key);
+    let mut secrets = std::collections::HashMap::new();
+    if let Ok(encrypted_secrets) = delta_core::db::secret::get_all_values(db, &repo_id).await {
+        for (key, encrypted_value) in encrypted_secrets {
+            if let Ok(value) = delta_core::crypto::decrypt(&encryption_key, &encrypted_value) {
+                secrets.insert(key, value);
+            }
+        }
+    }
+
+    let ctx = delta_ci::runner::PipelineContext {
+        pool: db,
+        repo_id: &repo_id,
+        repo_path,
+        commit_sha: &commit_sha,
+        secrets: &secrets,
+    };
+    delta_ci::runner::run_push_pipelines(&ctx, &branch).await;
     Ok(())
 }

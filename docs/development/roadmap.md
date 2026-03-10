@@ -61,13 +61,16 @@ Pull/merge request workflow with review tooling.
 
 Workflow execution engine for build, test, and deploy pipelines.
 
-- [ ] Workflow definition format (`.delta/workflows/*.toml`)
-- [ ] Trigger system (push, PR, tag, schedule, manual)
-- [ ] Job DAG scheduling with dependency resolution
+- [x] Workflow definition format (`.delta/workflows/*.toml`)
+- [x] Trigger system (push, PR, tag, schedule, manual)
+- [x] Job DAG scheduling with dependency resolution
+- [x] Pipeline runner — end-to-end orchestration (load workflows, match triggers, execute, store logs)
+- [x] Secret management (encrypted at rest via BLAKE3 stream cipher, scoped per repo)
+- [x] Push event → pipeline trigger integration (automatic on git push)
+- [x] Step log capture and storage
 - [ ] Sandboxed step execution (Landlock + seccomp on AGNOS)
 - [ ] Container-based runners (fallback for non-AGNOS hosts)
-- [ ] Log streaming and artifact upload from jobs
-- [ ] Secret management (encrypted at rest, scoped per repo)
+- [ ] Log streaming (real-time)
 - [ ] Reusable workflow templates
 - [ ] Matrix builds (multiple OS/arch/toolchain)
 - [ ] Pipeline status badges

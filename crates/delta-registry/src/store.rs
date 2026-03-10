@@ -61,6 +61,10 @@ impl BlobStore {
     /// Path for a blob — uses first 2 chars of hash as directory prefix
     /// to avoid too many files in one directory.
     fn blob_path(&self, hash: &str) -> PathBuf {
+        assert!(
+            !hash.is_empty() && hash.chars().all(|c| c.is_ascii_hexdigit()),
+            "invalid blob hash"
+        );
         let (prefix, rest) = hash.split_at(2.min(hash.len()));
         self.base_dir.join(prefix).join(rest)
     }

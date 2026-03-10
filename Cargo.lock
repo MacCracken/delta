@@ -536,7 +536,7 @@ dependencies = [
 
 [[package]]
 name = "delta-api"
-version = "0.1.0"
+version = "2026.3.10"
 dependencies = [
  "anyhow",
  "argon2",
@@ -568,12 +568,13 @@ dependencies = [
 
 [[package]]
 name = "delta-ci"
-version = "0.1.0"
+version = "2026.3.10"
 dependencies = [
  "chrono",
  "delta-core",
  "serde",
  "serde_json",
+ "sqlx",
  "tempfile",
  "thiserror",
  "tokio",
@@ -584,11 +585,13 @@ dependencies = [
 
 [[package]]
 name = "delta-core"
-version = "0.1.0"
+version = "2026.3.10"
 dependencies = [
  "anyhow",
  "blake3",
  "chrono",
+ "getrandom 0.3.4",
+ "hex",
  "serde",
  "serde_json",
  "sha2",
@@ -603,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "delta-registry"
-version = "0.1.0"
+version = "2026.3.10"
 dependencies = [
  "blake3",
  "bytes",
@@ -620,7 +623,7 @@ dependencies = [
 
 [[package]]
 name = "delta-vcs"
-version = "0.1.0"
+version = "2026.3.10"
 dependencies = [
  "blake3",
  "bytes",
@@ -635,7 +638,7 @@ dependencies = [
 
 [[package]]
 name = "delta-web"
-version = "0.1.0"
+version = "2026.3.10"
 dependencies = [
  "delta-core",
  "serde",

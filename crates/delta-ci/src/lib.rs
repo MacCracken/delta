@@ -7,6 +7,7 @@
 pub mod executor;
 pub mod parser;
 pub mod pipeline;
+pub mod runner;
 pub mod trigger;
 pub mod workflow;
 

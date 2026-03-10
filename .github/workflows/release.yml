@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - '[0-9]*'
+      - '[0-9][0-9][0-9][0-9].*'
 
 permissions:
   contents: write
@@ -128,7 +128,12 @@ jobs:
 
       - name: Read version
         id: version
-        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+        run: |
+          RAW=$(cat VERSION)
+          echo "version=${RAW}" >> "$GITHUB_OUTPUT"
+          # Build number: YYYY.M.D-N -> YYYYMMDDN, YYYY.M.D -> YYYYMMDD
+          BUILD=$(echo "$RAW" | sed -E 's/^([0-9]{4})\.([0-9]{1,2})\.([0-9]{1,2})(-([0-9]+))?$/printf "%04d%02d%02d%s" \1 \2 \3 \5/e')
+          echo "build=${BUILD}" >> "$GITHUB_OUTPUT"
 
       - name: Generate changelog
         id: changelog
@@ -181,7 +186,11 @@ jobs:
 
       - name: Read version
         id: version
-        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+        run: |
+          RAW=$(cat VERSION)
+          echo "version=${RAW}" >> "$GITHUB_OUTPUT"
+          BUILD=$(echo "$RAW" | sed -E 's/^([0-9]{4})\.([0-9]{1,2})\.([0-9]{1,2})(-([0-9]+))?$/printf "%04d%02d%02d%s" \1 \2 \3 \5/e')
+          echo "build=${BUILD}" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -205,7 +214,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.build }}
             ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:alpha
           cache-from: type=gha
           cache-to: type=gha,mode=max

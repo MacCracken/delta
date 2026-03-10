@@ -137,6 +137,7 @@ struct ListPullsQuery {
 async fn list_pulls(
     State(state): State<AppState>,
     Path((owner, name)): Path<(String, String)>,
+    AuthUser(_user): AuthUser,
     Query(query): Query<ListPullsQuery>,
 ) -> Result<Json<Vec<PrResponse>>, (StatusCode, String)> {
     let (repo, _) = resolve_repo(&state, &owner, &name).await?;
@@ -212,6 +213,7 @@ async fn create_pull(
 async fn get_pull(
     State(state): State<AppState>,
     Path((owner, name, number)): Path<(String, String, i64)>,
+    AuthUser(_user): AuthUser,
 ) -> Result<Json<PrResponse>, (StatusCode, String)> {
     let (repo, _) = resolve_repo(&state, &owner, &name).await?;
     let repo_id = repo.id.to_string();
@@ -423,6 +425,7 @@ async fn reopen_pull(
 async fn get_diff(
     State(state): State<AppState>,
     Path((owner, name, number)): Path<(String, String, i64)>,
+    AuthUser(_user): AuthUser,
 ) -> Result<
     (
         StatusCode,
@@ -456,6 +459,7 @@ async fn get_diff(
 async fn get_commits(
     State(state): State<AppState>,
     Path((owner, name, number)): Path<(String, String, i64)>,
+    AuthUser(_user): AuthUser,
 ) -> Result<Json<Vec<delta_vcs::diff::CommitInfo>>, (StatusCode, String)> {
     let (repo, _) = resolve_repo(&state, &owner, &name).await?;
     let repo_id = repo.id.to_string();
@@ -480,6 +484,7 @@ async fn get_commits(
 async fn list_comments(
     State(state): State<AppState>,
     Path((owner, name, number)): Path<(String, String, i64)>,
+    AuthUser(_user): AuthUser,
 ) -> Result<Json<Vec<CommentResponse>>, (StatusCode, String)> {
     let (repo, _) = resolve_repo(&state, &owner, &name).await?;
     let repo_id = repo.id.to_string();
@@ -565,6 +570,7 @@ async fn create_comment(
 async fn list_reviews(
     State(state): State<AppState>,
     Path((owner, name, number)): Path<(String, String, i64)>,
+    AuthUser(_user): AuthUser,
 ) -> Result<Json<Vec<ReviewResponse>>, (StatusCode, String)> {
     let (repo, _) = resolve_repo(&state, &owner, &name).await?;
     let repo_id = repo.id.to_string();

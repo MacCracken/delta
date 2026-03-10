@@ -41,6 +41,7 @@ pub fn router() -> Router<AppState> {
 async fn list_artifacts(
     State(state): State<AppState>,
     Path((owner, name)): Path<(String, String)>,
+    AuthUser(_user): AuthUser,
 ) -> Result<Json<Vec<db::artifact::Artifact>>, (StatusCode, String)> {
     let (repo, _) = resolve_repo(&state, &owner, &name).await?;
     let artifacts = db::artifact::list_for_repo(&state.db, &repo.id.to_string())
@@ -89,21 +90,31 @@ async fn upload_artifact(
 
 async fn get_artifact(
     State(state): State<AppState>,
-    Path((_owner, _name, artifact_id)): Path<(String, String, String)>,
+    Path((owner, name, artifact_id)): Path<(String, String, String)>,
+    AuthUser(_user): AuthUser,
 ) -> Result<Json<db::artifact::Artifact>, (StatusCode, String)> {
+    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
     let artifact = db::artifact::get(&state.db, &artifact_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    if artifact.repo_id != repo.id.to_string() {
+        return Err((StatusCode::NOT_FOUND, "artifact not found".into()));
+    }
     Ok(Json(artifact))
 }
 
 async fn download_artifact(
     State(state): State<AppState>,
-    Path((_owner, _name, artifact_id)): Path<(String, String, String)>,
+    Path((owner, name, artifact_id)): Path<(String, String, String)>,
+    AuthUser(_user): AuthUser,
 ) -> Result<(StatusCode, Vec<u8>), (StatusCode, String)> {
+    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
     let artifact = db::artifact::get(&state.db, &artifact_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    if artifact.repo_id != repo.id.to_string() {
+        return Err((StatusCode::NOT_FOUND, "artifact not found".into()));
+    }
 
     let data = state
         .blob_store
@@ -120,13 +131,16 @@ async fn delete_artifact(
     Path((owner, name, artifact_id)): Path<(String, String, String)>,
     AuthUser(user): AuthUser,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let (_, owner_user) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, owner_user) = resolve_repo(&state, &owner, &name).await?;
     if user.id != owner_user.id {
         return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
     }
     let artifact = db::artifact::get(&state.db, &artifact_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    if artifact.repo_id != repo.id.to_string() {
+        return Err((StatusCode::NOT_FOUND, "artifact not found".into()));
+    }
 
     db::artifact::delete(&state.db, &artifact_id)
         .await

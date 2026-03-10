@@ -43,3 +43,49 @@ impl BranchProtection {
         !self.prevent_force_push
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_rule(pattern: &str, require_pr: bool, prevent_force: bool) -> BranchProtection {
+        BranchProtection {
+            id: Uuid::new_v4(),
+            repo_id: Uuid::new_v4(),
+            pattern: pattern.into(),
+            require_pr,
+            required_approvals: 1,
+            require_status_checks: true,
+            prevent_force_push: prevent_force,
+            prevent_deletion: true,
+        }
+    }
+
+    #[test]
+    fn test_exact_match() {
+        let rule = make_rule("main", false, false);
+        assert!(rule.matches("main"));
+        assert!(!rule.matches("develop"));
+    }
+
+    #[test]
+    fn test_glob_match() {
+        let rule = make_rule("release/*", false, false);
+        assert!(rule.matches("release/v1.0"));
+        assert!(rule.matches("release/beta"));
+        assert!(!rule.matches("main"));
+        assert!(!rule.matches("release"));
+    }
+
+    #[test]
+    fn test_allows_direct_push() {
+        assert!(make_rule("main", false, false).allows_direct_push());
+        assert!(!make_rule("main", true, false).allows_direct_push());
+    }
+
+    #[test]
+    fn test_allows_force_push() {
+        assert!(make_rule("main", false, false).allows_force_push());
+        assert!(!make_rule("main", false, true).allows_force_push());
+    }
+}

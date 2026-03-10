@@ -135,3 +135,37 @@ impl CheckState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pr_state_as_str() {
+        assert_eq!(PrState::Open.as_str(), "open");
+        assert_eq!(PrState::Closed.as_str(), "closed");
+        assert_eq!(PrState::Merged.as_str(), "merged");
+    }
+
+    #[test]
+    fn test_merge_strategy_as_str() {
+        assert_eq!(MergeStrategy::Merge.as_str(), "merge");
+        assert_eq!(MergeStrategy::Squash.as_str(), "squash");
+        assert_eq!(MergeStrategy::Rebase.as_str(), "rebase");
+    }
+
+    #[test]
+    fn test_review_state_as_str() {
+        assert_eq!(ReviewState::Approved.as_str(), "approved");
+        assert_eq!(ReviewState::ChangesRequested.as_str(), "changes_requested");
+        assert_eq!(ReviewState::Commented.as_str(), "commented");
+    }
+
+    #[test]
+    fn test_check_state_as_str() {
+        assert_eq!(CheckState::Pending.as_str(), "pending");
+        assert_eq!(CheckState::Success.as_str(), "success");
+        assert_eq!(CheckState::Failure.as_str(), "failure");
+        assert_eq!(CheckState::Error.as_str(), "error");
+    }
+}

@@ -30,3 +30,24 @@ impl User {
         user
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_user() {
+        let user = User::new("alice", "alice@example.com");
+        assert_eq!(user.username, "alice");
+        assert_eq!(user.email, "alice@example.com");
+        assert!(!user.is_agent);
+        assert!(user.display_name.is_none());
+    }
+
+    #[test]
+    fn test_new_agent() {
+        let agent = User::new_agent("bot", "bot@example.com");
+        assert!(agent.is_agent);
+        assert_eq!(agent.username, "bot");
+    }
+}

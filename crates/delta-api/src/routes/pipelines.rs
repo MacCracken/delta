@@ -55,6 +55,7 @@ fn default_limit() -> i64 {
 async fn list_pipelines(
     State(state): State<AppState>,
     Path((owner, name)): Path<(String, String)>,
+    AuthUser(_user): AuthUser,
     Query(query): Query<ListPipelinesQuery>,
 ) -> Result<Json<Vec<db::pipeline::PipelineRun>>, (StatusCode, String)> {
     let (repo, _) = resolve_repo(&state, &owner, &name).await?;
@@ -85,10 +86,13 @@ fn default_trigger() -> String {
 async fn trigger_pipeline(
     State(state): State<AppState>,
     Path((owner, name)): Path<(String, String)>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
     Json(req): Json<TriggerPipelineRequest>,
 ) -> Result<(StatusCode, Json<db::pipeline::PipelineRun>), (StatusCode, String)> {
-    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, owner_user) = resolve_repo(&state, &owner, &name).await?;
+    if user.id != owner_user.id {
+        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
+    }
     let run = db::pipeline::create_pipeline(
         &state.db,
         &repo.id.to_string(),
@@ -104,19 +108,34 @@ async fn trigger_pipeline(
 
 async fn get_pipeline(
     State(state): State<AppState>,
-    Path((_owner, _name, pipeline_id)): Path<(String, String, String)>,
+    Path((owner, name, pipeline_id)): Path<(String, String, String)>,
+    AuthUser(_user): AuthUser,
 ) -> Result<Json<db::pipeline::PipelineRun>, (StatusCode, String)> {
+    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
     let run = db::pipeline::get_pipeline(&state.db, &pipeline_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    if run.repo_id != repo.id.to_string() {
+        return Err((StatusCode::NOT_FOUND, "pipeline not found".into()));
+    }
     Ok(Json(run))
 }
 
 async fn cancel_pipeline(
     State(state): State<AppState>,
-    Path((_owner, _name, pipeline_id)): Path<(String, String, String)>,
-    AuthUser(_user): AuthUser,
+    Path((owner, name, pipeline_id)): Path<(String, String, String)>,
+    AuthUser(user): AuthUser,
 ) -> Result<Json<db::pipeline::PipelineRun>, (StatusCode, String)> {
+    let (repo, owner_user) = resolve_repo(&state, &owner, &name).await?;
+    if user.id != owner_user.id {
+        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
+    }
+    let existing = db::pipeline::get_pipeline(&state.db, &pipeline_id)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    if existing.repo_id != repo.id.to_string() {
+        return Err((StatusCode::NOT_FOUND, "pipeline not found".into()));
+    }
     let run = db::pipeline::update_pipeline_status(
         &state.db,
         &pipeline_id,
@@ -129,8 +148,16 @@ async fn cancel_pipeline(
 
 async fn list_jobs(
     State(state): State<AppState>,
-    Path((_owner, _name, pipeline_id)): Path<(String, String, String)>,
+    Path((owner, name, pipeline_id)): Path<(String, String, String)>,
+    AuthUser(_user): AuthUser,
 ) -> Result<Json<Vec<db::pipeline::JobRun>>, (StatusCode, String)> {
+    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let run = db::pipeline::get_pipeline(&state.db, &pipeline_id)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    if run.repo_id != repo.id.to_string() {
+        return Err((StatusCode::NOT_FOUND, "pipeline not found".into()));
+    }
     let jobs = db::pipeline::list_jobs(&state.db, &pipeline_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -139,8 +166,16 @@ async fn list_jobs(
 
 async fn get_job_logs(
     State(state): State<AppState>,
-    Path((_owner, _name, _pipeline_id, job_id)): Path<(String, String, String, String)>,
+    Path((owner, name, pipeline_id, job_id)): Path<(String, String, String, String)>,
+    AuthUser(_user): AuthUser,
 ) -> Result<Json<Vec<db::pipeline::StepLog>>, (StatusCode, String)> {
+    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let run = db::pipeline::get_pipeline(&state.db, &pipeline_id)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    if run.repo_id != repo.id.to_string() {
+        return Err((StatusCode::NOT_FOUND, "pipeline not found".into()));
+    }
     let logs = db::pipeline::get_step_logs(&state.db, &job_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -196,8 +231,9 @@ async fn set_secret(
     if user.id != owner_user.id {
         return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
     }
-    // In production, encrypt the value before storing
-    db::secret::set(&state.db, &repo.id.to_string(), &req.name, &req.value)
+    let encryption_key = delta_core::crypto::derive_key(&state.config.auth.secrets_key);
+    let encrypted = delta_core::crypto::encrypt(&encryption_key, req.value.as_bytes());
+    db::secret::set(&state.db, &repo.id.to_string(), &req.name, &encrypted)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)

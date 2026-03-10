@@ -14,3 +14,5 @@ db_url = "sqlite:///var/lib/delta/delta.db"
 [auth]
 enabled = true
 token_expiry_secs = 86400
+# Key used to encrypt pipeline secrets at rest. Change this in production!
+secrets_key = "change-me-to-a-strong-random-passphrase"

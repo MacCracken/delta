@@ -51,3 +51,31 @@ impl Repository {
         format!("{}/{}", self.owner, self.name)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_repo_defaults() {
+        let repo = Repository::new("alice", "delta");
+        assert_eq!(repo.owner, "alice");
+        assert_eq!(repo.name, "delta");
+        assert_eq!(repo.default_branch, "main");
+        assert_eq!(repo.visibility, Visibility::Private);
+        assert!(repo.description.is_none());
+    }
+
+    #[test]
+    fn test_full_name() {
+        let repo = Repository::new("alice", "delta");
+        assert_eq!(repo.full_name(), "alice/delta");
+    }
+
+    #[test]
+    fn test_visibility_as_str() {
+        assert_eq!(Visibility::Public.as_str(), "public");
+        assert_eq!(Visibility::Private.as_str(), "private");
+        assert_eq!(Visibility::Internal.as_str(), "internal");
+    }
+}

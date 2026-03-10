@@ -189,11 +189,23 @@ async fn delete_protection(
         return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
     }
 
-    // Verify the repo exists (validates {owner}/{name})
+    // Verify the repo exists and protection belongs to it
     let owner_id = owner_user.id.to_string();
-    let _repo = delta_core::db::repo::get_by_owner_and_name(&state.db, &owner_id, &name)
+    let repo = delta_core::db::repo::get_by_owner_and_name(&state.db, &owner_id, &name)
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "repository not found".into()))?;
+
+    // Verify protection belongs to this repo before deleting
+    let protections =
+        delta_core::db::branch_protection::list_for_repo(&state.db, &repo.id.to_string())
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if !protections
+        .iter()
+        .any(|p| p.id.to_string() == protection_id)
+    {
+        return Err((StatusCode::NOT_FOUND, "protection rule not found".into()));
+    }
 
     delta_core::db::branch_protection::delete(&state.db, &protection_id)
         .await
