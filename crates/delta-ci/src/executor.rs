@@ -118,6 +118,9 @@ pub fn resolve_job_order(workflow: &Workflow) -> Result<Vec<String>, String> {
     Ok(order)
 }
 
+/// Maximum time a single step can run before being killed.
+const STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60); // 30 minutes
+
 async fn run_step(
     name: &str,
     cmd: &str,
@@ -126,28 +129,37 @@ async fn run_step(
 ) -> StepResult {
     tracing::info!(step = name, "executing step");
 
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .current_dir(work_dir)
-        .envs(env_vars)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await;
+    let output = tokio::time::timeout(
+        STEP_TIMEOUT,
+        Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .current_dir(work_dir)
+            .envs(env_vars)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output(),
+    )
+    .await;
 
     match output {
-        Ok(out) => StepResult {
+        Ok(Ok(out)) => StepResult {
             name: name.to_string(),
             exit_code: out.status.code().unwrap_or(-1),
             stdout: String::from_utf8_lossy(&out.stdout).to_string(),
             stderr: String::from_utf8_lossy(&out.stderr).to_string(),
         },
-        Err(e) => StepResult {
+        Ok(Err(e)) => StepResult {
             name: name.to_string(),
             exit_code: -1,
             stdout: String::new(),
             stderr: format!("failed to execute: {}", e),
+        },
+        Err(_) => StepResult {
+            name: name.to_string(),
+            exit_code: -1,
+            stdout: String::new(),
+            stderr: format!("step timed out after {} seconds", STEP_TIMEOUT.as_secs()),
         },
     }
 }

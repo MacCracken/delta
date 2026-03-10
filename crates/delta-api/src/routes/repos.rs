@@ -148,8 +148,8 @@ async fn get_repo(
             )
         })?;
 
-    // Check visibility
-    if repo.visibility == Visibility::Private {
+    // Check visibility — non-public repos require owner
+    if repo.visibility != Visibility::Public {
         let is_owner = user.as_ref().is_some_and(|u| u.id == owner_user.id);
         if !is_owner {
             return Err((

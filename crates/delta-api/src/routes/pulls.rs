@@ -9,7 +9,7 @@ use delta_core::models::pull_request::*;
 use serde::{Deserialize, Serialize};
 
 use crate::extractors::AuthUser;
-use crate::helpers::resolve_repo;
+use crate::helpers::resolve_repo_authed;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -137,10 +137,10 @@ struct ListPullsQuery {
 async fn list_pulls(
     State(state): State<AppState>,
     Path((owner, name)): Path<(String, String)>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
     Query(query): Query<ListPullsQuery>,
 ) -> Result<Json<Vec<PrResponse>>, (StatusCode, String)> {
-    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let repo_id = repo.id.to_string();
 
     let prs = db::pull_request::list_for_repo(&state.db, &repo_id, query.state.as_deref())
@@ -170,7 +170,7 @@ async fn create_pull(
     AuthUser(user): AuthUser,
     Json(req): Json<CreatePrRequest>,
 ) -> Result<(StatusCode, Json<PrResponse>), (StatusCode, String)> {
-    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let repo_id = repo.id.to_string();
     let user_id = user.id.to_string();
 
@@ -213,9 +213,9 @@ async fn create_pull(
 async fn get_pull(
     State(state): State<AppState>,
     Path((owner, name, number)): Path<(String, String, i64)>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
 ) -> Result<Json<PrResponse>, (StatusCode, String)> {
-    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let repo_id = repo.id.to_string();
 
     let pr = db::pull_request::get_by_number(&state.db, &repo_id, number)
@@ -237,7 +237,7 @@ async fn update_pull(
     AuthUser(user): AuthUser,
     Json(req): Json<UpdatePrRequest>,
 ) -> Result<Json<PrResponse>, (StatusCode, String)> {
-    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let repo_id = repo.id.to_string();
 
     let pr = db::pull_request::get_by_number(&state.db, &repo_id, number)
@@ -278,7 +278,7 @@ async fn merge_pull(
     AuthUser(user): AuthUser,
     Json(req): Json<MergePrRequest>,
 ) -> Result<Json<PrResponse>, (StatusCode, String)> {
-    let (repo, owner_user) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let repo_id = repo.id.to_string();
 
     // Only repo owner can merge (for now)
@@ -381,7 +381,7 @@ async fn close_pull(
     Path((owner, name, number)): Path<(String, String, i64)>,
     AuthUser(user): AuthUser,
 ) -> Result<Json<PrResponse>, (StatusCode, String)> {
-    let (repo, owner_user) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let repo_id = repo.id.to_string();
 
     let pr = db::pull_request::get_by_number(&state.db, &repo_id, number)
@@ -404,7 +404,7 @@ async fn reopen_pull(
     Path((owner, name, number)): Path<(String, String, i64)>,
     AuthUser(user): AuthUser,
 ) -> Result<Json<PrResponse>, (StatusCode, String)> {
-    let (repo, owner_user) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let repo_id = repo.id.to_string();
 
     let pr = db::pull_request::get_by_number(&state.db, &repo_id, number)
@@ -425,7 +425,7 @@ async fn reopen_pull(
 async fn get_diff(
     State(state): State<AppState>,
     Path((owner, name, number)): Path<(String, String, i64)>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
 ) -> Result<
     (
         StatusCode,
@@ -434,7 +434,7 @@ async fn get_diff(
     ),
     (StatusCode, String),
 > {
-    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let repo_id = repo.id.to_string();
 
     let pr = db::pull_request::get_by_number(&state.db, &repo_id, number)
@@ -459,9 +459,9 @@ async fn get_diff(
 async fn get_commits(
     State(state): State<AppState>,
     Path((owner, name, number)): Path<(String, String, i64)>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
 ) -> Result<Json<Vec<delta_vcs::diff::CommitInfo>>, (StatusCode, String)> {
-    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let repo_id = repo.id.to_string();
 
     let pr = db::pull_request::get_by_number(&state.db, &repo_id, number)
@@ -484,9 +484,9 @@ async fn get_commits(
 async fn list_comments(
     State(state): State<AppState>,
     Path((owner, name, number)): Path<(String, String, i64)>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
 ) -> Result<Json<Vec<CommentResponse>>, (StatusCode, String)> {
-    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let repo_id = repo.id.to_string();
 
     let pr = db::pull_request::get_by_number(&state.db, &repo_id, number)
@@ -531,7 +531,7 @@ async fn create_comment(
     AuthUser(user): AuthUser,
     Json(req): Json<CreateCommentRequest>,
 ) -> Result<(StatusCode, Json<CommentResponse>), (StatusCode, String)> {
-    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let repo_id = repo.id.to_string();
 
     let pr = db::pull_request::get_by_number(&state.db, &repo_id, number)
@@ -570,9 +570,9 @@ async fn create_comment(
 async fn list_reviews(
     State(state): State<AppState>,
     Path((owner, name, number)): Path<(String, String, i64)>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
 ) -> Result<Json<Vec<ReviewResponse>>, (StatusCode, String)> {
-    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let repo_id = repo.id.to_string();
 
     let pr = db::pull_request::get_by_number(&state.db, &repo_id, number)
@@ -612,7 +612,7 @@ async fn submit_review(
     AuthUser(user): AuthUser,
     Json(req): Json<SubmitReviewRequest>,
 ) -> Result<(StatusCode, Json<ReviewResponse>), (StatusCode, String)> {
-    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let repo_id = repo.id.to_string();
 
     let pr = db::pull_request::get_by_number(&state.db, &repo_id, number)

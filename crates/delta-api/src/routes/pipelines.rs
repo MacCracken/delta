@@ -10,7 +10,7 @@ use delta_core::db;
 use serde::{Deserialize, Serialize};
 
 use crate::extractors::AuthUser;
-use crate::helpers::resolve_repo;
+use crate::helpers::resolve_repo_authed;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -55,10 +55,10 @@ fn default_limit() -> i64 {
 async fn list_pipelines(
     State(state): State<AppState>,
     Path((owner, name)): Path<(String, String)>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
     Query(query): Query<ListPipelinesQuery>,
 ) -> Result<Json<Vec<db::pipeline::PipelineRun>>, (StatusCode, String)> {
-    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let limit = query.limit.clamp(1, 200);
     let runs = db::pipeline::list_pipelines(
         &state.db,
@@ -89,7 +89,7 @@ async fn trigger_pipeline(
     AuthUser(user): AuthUser,
     Json(req): Json<TriggerPipelineRequest>,
 ) -> Result<(StatusCode, Json<db::pipeline::PipelineRun>), (StatusCode, String)> {
-    let (repo, owner_user) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     if user.id != owner_user.id {
         return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
     }
@@ -109,9 +109,9 @@ async fn trigger_pipeline(
 async fn get_pipeline(
     State(state): State<AppState>,
     Path((owner, name, pipeline_id)): Path<(String, String, String)>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
 ) -> Result<Json<db::pipeline::PipelineRun>, (StatusCode, String)> {
-    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let run = db::pipeline::get_pipeline(&state.db, &pipeline_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
@@ -126,7 +126,7 @@ async fn cancel_pipeline(
     Path((owner, name, pipeline_id)): Path<(String, String, String)>,
     AuthUser(user): AuthUser,
 ) -> Result<Json<db::pipeline::PipelineRun>, (StatusCode, String)> {
-    let (repo, owner_user) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     if user.id != owner_user.id {
         return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
     }
@@ -149,9 +149,9 @@ async fn cancel_pipeline(
 async fn list_jobs(
     State(state): State<AppState>,
     Path((owner, name, pipeline_id)): Path<(String, String, String)>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
 ) -> Result<Json<Vec<db::pipeline::JobRun>>, (StatusCode, String)> {
-    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let run = db::pipeline::get_pipeline(&state.db, &pipeline_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
@@ -167,9 +167,9 @@ async fn list_jobs(
 async fn get_job_logs(
     State(state): State<AppState>,
     Path((owner, name, pipeline_id, job_id)): Path<(String, String, String, String)>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
 ) -> Result<Json<Vec<db::pipeline::StepLog>>, (StatusCode, String)> {
-    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let run = db::pipeline::get_pipeline(&state.db, &pipeline_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
@@ -189,7 +189,7 @@ async fn list_secrets(
     Path((owner, name)): Path<(String, String)>,
     AuthUser(user): AuthUser,
 ) -> Result<Json<Vec<SecretResponse>>, (StatusCode, String)> {
-    let (repo, owner_user) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     if user.id != owner_user.id {
         return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
     }
@@ -227,7 +227,7 @@ async fn set_secret(
     AuthUser(user): AuthUser,
     Json(req): Json<SetSecretRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let (repo, owner_user) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     if user.id != owner_user.id {
         return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
     }
@@ -244,7 +244,7 @@ async fn delete_secret(
     Path((owner, name, secret_name)): Path<(String, String, String)>,
     AuthUser(user): AuthUser,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let (repo, owner_user) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     if user.id != owner_user.id {
         return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
     }

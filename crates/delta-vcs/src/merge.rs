@@ -7,6 +7,31 @@ use tokio::process::Command;
 
 use crate::validate::validate_ref;
 
+/// Validate author name/email to prevent git config injection.
+fn validate_author(name: &str, email: &str) -> Result<()> {
+    if name.is_empty() || email.is_empty() {
+        return Err(DeltaError::InvalidRef(
+            "author name/email cannot be empty".into(),
+        ));
+    }
+    // Reject control characters and characters that could be interpreted as git options
+    for (label, value) in [("name", name), ("email", email)] {
+        if value.starts_with('-') {
+            return Err(DeltaError::InvalidRef(format!(
+                "author {} cannot start with '-'",
+                label
+            )));
+        }
+        if value.contains('\0') || value.contains('\n') || value.contains('\r') {
+            return Err(DeltaError::InvalidRef(format!(
+                "author {} contains invalid characters",
+                label
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Execute a merge in a bare repository using a temporary worktree.
 /// Returns the resulting merge commit SHA.
 pub async fn execute_merge(
@@ -20,6 +45,7 @@ pub async fn execute_merge(
 ) -> Result<String> {
     validate_ref(base_branch)?;
     validate_ref(head_branch)?;
+    validate_author(author_name, author_email)?;
 
     let tmp_dir = tempfile::tempdir()
         .map_err(|e| DeltaError::Storage(format!("failed to create temp dir: {}", e)))?;

@@ -11,7 +11,7 @@ use delta_core::db;
 use serde::Deserialize;
 
 use crate::extractors::AuthUser;
-use crate::helpers::resolve_repo;
+use crate::helpers::resolve_repo_authed;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -41,9 +41,9 @@ pub fn router() -> Router<AppState> {
 async fn list_artifacts(
     State(state): State<AppState>,
     Path((owner, name)): Path<(String, String)>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
 ) -> Result<Json<Vec<db::artifact::Artifact>>, (StatusCode, String)> {
-    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let artifacts = db::artifact::list_for_repo(&state.db, &repo.id.to_string())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -56,7 +56,7 @@ async fn upload_artifact(
     AuthUser(user): AuthUser,
     body: Bytes,
 ) -> Result<(StatusCode, Json<db::artifact::Artifact>), (StatusCode, String)> {
-    let (repo, owner_user) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     if user.id != owner_user.id {
         return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
     }
@@ -91,9 +91,9 @@ async fn upload_artifact(
 async fn get_artifact(
     State(state): State<AppState>,
     Path((owner, name, artifact_id)): Path<(String, String, String)>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
 ) -> Result<Json<db::artifact::Artifact>, (StatusCode, String)> {
-    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let artifact = db::artifact::get(&state.db, &artifact_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
@@ -106,9 +106,9 @@ async fn get_artifact(
 async fn download_artifact(
     State(state): State<AppState>,
     Path((owner, name, artifact_id)): Path<(String, String, String)>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
 ) -> Result<(StatusCode, Vec<u8>), (StatusCode, String)> {
-    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let artifact = db::artifact::get(&state.db, &artifact_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
@@ -131,7 +131,7 @@ async fn delete_artifact(
     Path((owner, name, artifact_id)): Path<(String, String, String)>,
     AuthUser(user): AuthUser,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let (repo, owner_user) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     if user.id != owner_user.id {
         return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
     }
@@ -155,8 +155,9 @@ async fn delete_artifact(
 async fn list_releases(
     State(state): State<AppState>,
     Path((owner, name)): Path<(String, String)>,
+    AuthUser(user): AuthUser,
 ) -> Result<Json<Vec<db::release::Release>>, (StatusCode, String)> {
-    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let releases = db::release::list_for_repo(&state.db, &repo.id.to_string())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -180,7 +181,7 @@ async fn create_release(
     AuthUser(user): AuthUser,
     Json(req): Json<CreateReleaseRequest>,
 ) -> Result<(StatusCode, Json<db::release::Release>), (StatusCode, String)> {
-    let (repo, owner_user) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     if user.id != owner_user.id {
         return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
     }
@@ -204,8 +205,9 @@ async fn create_release(
 async fn get_release(
     State(state): State<AppState>,
     Path((owner, name, tag)): Path<(String, String, String)>,
+    AuthUser(user): AuthUser,
 ) -> Result<Json<db::release::Release>, (StatusCode, String)> {
-    let (repo, _) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let release = db::release::get_by_tag(&state.db, &repo.id.to_string(), &tag)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
@@ -217,7 +219,7 @@ async fn delete_release(
     Path((owner, name, tag)): Path<(String, String, String)>,
     AuthUser(user): AuthUser,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let (repo, owner_user) = resolve_repo(&state, &owner, &name).await?;
+    let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     if user.id != owner_user.id {
         return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
     }

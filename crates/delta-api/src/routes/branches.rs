@@ -7,6 +7,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::extractors::AuthUser;
+use crate::helpers::resolve_repo_authed;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -26,7 +27,11 @@ pub fn router() -> Router<AppState> {
 async fn list_branches(
     State(state): State<AppState>,
     Path((owner, name)): Path<(String, String)>,
+    AuthUser(user): AuthUser,
 ) -> Result<Json<Vec<delta_vcs::refs::BranchInfo>>, (StatusCode, String)> {
+    // Enforce visibility check for private repos
+    let _ = resolve_repo_authed(&state, &owner, &name, &user).await?;
+
     let repo_path = state
         .repo_host
         .repo_path(&owner, &name)
@@ -44,7 +49,11 @@ async fn list_branches(
 async fn list_tags(
     State(state): State<AppState>,
     Path((owner, name)): Path<(String, String)>,
+    AuthUser(user): AuthUser,
 ) -> Result<Json<Vec<delta_vcs::refs::TagInfo>>, (StatusCode, String)> {
+    // Enforce visibility check for private repos
+    let _ = resolve_repo_authed(&state, &owner, &name, &user).await?;
+
     let repo_path = state
         .repo_host
         .repo_path(&owner, &name)
