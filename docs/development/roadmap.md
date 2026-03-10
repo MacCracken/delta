@@ -1,0 +1,134 @@
+# Delta Development Roadmap
+
+Delta is a code hosting platform providing version control, CI/CD, and artifact registry — built for the AGNOS ecosystem. Designed to be clean, private, and natively accessible to both humans and AI agents.
+
+## Phase 1 — Foundation (Current)
+
+Core infrastructure, project scaffold, and basic repo hosting.
+
+- [x] Project scaffold (Rust workspace, crate structure)
+- [x] Core types and configuration (`delta-core`)
+- [ ] Database schema and migrations (SQLite + Postgres)
+- [ ] User and authentication system (token-based, SSH keys)
+- [ ] Agent identity and API key management
+- [ ] Repository CRUD via REST API
+- [ ] Bare git repository initialization and storage
+- [ ] Health check and status endpoints
+- [ ] Configuration file loading (TOML)
+- [ ] Structured logging and tracing
+
+## Phase 2 — Git Protocol
+
+Full git push/pull support over HTTP and SSH.
+
+- [ ] Smart HTTP transport (info/refs, upload-pack, receive-pack)
+- [ ] SSH transport via built-in SSH server
+- [ ] Ref advertisement and negotiation
+- [ ] Push authorization and branch protection rules
+- [ ] Webhook dispatch on push/tag events
+- [ ] Large file support (LFS-compatible)
+- [ ] Shallow clone and partial clone support
+- [ ] Repository forking and mirroring
+
+## Phase 3 — Code Review
+
+Pull/merge request workflow with review tooling.
+
+- [ ] Pull request model (create, update, merge, close)
+- [ ] Diff rendering and file-level comments
+- [ ] Review states (approve, request changes, comment)
+- [ ] Merge strategies (merge commit, squash, rebase)
+- [ ] Status checks integration (block merge on failure)
+- [ ] AI-assisted code review summaries
+- [ ] Agent-authored PRs with provenance tracking
+- [ ] Inline suggestions with one-click apply
+
+## Phase 4 — CI/CD Engine
+
+Workflow execution engine for build, test, and deploy pipelines.
+
+- [ ] Workflow definition format (`.delta/workflows/*.toml`)
+- [ ] Trigger system (push, PR, tag, schedule, manual)
+- [ ] Job DAG scheduling with dependency resolution
+- [ ] Sandboxed step execution (Landlock + seccomp on AGNOS)
+- [ ] Container-based runners (fallback for non-AGNOS hosts)
+- [ ] Log streaming and artifact upload from jobs
+- [ ] Secret management (encrypted at rest, scoped per repo)
+- [ ] Reusable workflow templates
+- [ ] Matrix builds (multiple OS/arch/toolchain)
+- [ ] Pipeline status badges
+
+## Phase 5 — Artifact Registry
+
+Package and release artifact storage with integrity verification.
+
+- [ ] Content-addressable blob storage (BLAKE3)
+- [ ] Release management (tags, changelogs, asset uploads)
+- [ ] Generic artifact upload/download API
+- [ ] `.ark` package registry (AGNOS native packages)
+- [ ] Container image registry (OCI-compatible)
+- [ ] Artifact retention policies and cleanup
+- [ ] Signed artifacts with ed25519 verification
+- [ ] Download statistics and audit trail
+
+## Phase 6 — Web Interface
+
+Browser-based UI for humans and structured views for agents.
+
+- [ ] Repository browser (file tree, blame, history)
+- [ ] Commit and diff viewer
+- [ ] Pull request UI (conversation, diff, checks)
+- [ ] CI/CD dashboard (pipeline list, log viewer)
+- [ ] User/org profile pages
+- [ ] Settings and administration panels
+- [ ] Responsive design, keyboard navigation
+- [ ] Dark/light theme support
+
+## Phase 7 — AI-Native Features
+
+First-class AI agent integration across the platform.
+
+- [ ] Structured API responses optimized for LLM consumption
+- [ ] Agent-scoped API tokens with fine-grained permissions
+- [ ] Code search with semantic indexing
+- [ ] AI-generated PR descriptions and commit summaries
+- [ ] Automated issue triage and labeling
+- [ ] Training data export (opt-in, per-repo, privacy-preserving)
+- [ ] Agent activity dashboard and audit log
+- [ ] Natural language query interface for repos
+
+## Phase 8 — Federation and Privacy
+
+Multi-instance federation and private deployment features.
+
+- [ ] Instance-to-instance federation protocol
+- [ ] Cross-instance forking and mirroring
+- [ ] Private instance deployment (single binary, minimal config)
+- [ ] End-to-end encrypted repositories
+- [ ] Audit log export for compliance
+- [ ] AGNOS integration (daimon agent registry, sigil trust chain)
+- [ ] Air-gapped deployment support
+
+## Phase 9 — Scale and Hardening
+
+Production readiness, performance, and security hardening.
+
+- [ ] Horizontal scaling (stateless API, shared storage)
+- [ ] Repository sharding and replication
+- [ ] Rate limiting and abuse prevention
+- [ ] Security audit and penetration testing
+- [ ] Performance benchmarks and optimization
+- [ ] Backup and disaster recovery
+- [ ] Monitoring and alerting integration
+- [ ] Documentation and API reference
+
+---
+
+## Design Principles
+
+1. **Privacy-first** — self-hosted by default, no telemetry, user owns their data
+2. **AI-native** — agents are first-class users, not afterthoughts
+3. **Simple** — fewer concepts, cleaner UX, sensible defaults over configuration
+4. **Fast** — Rust backend, minimal overhead, responsive UI
+5. **Compatible** — standard git protocol, works with existing git clients
+6. **AGNOS-integrated** — native support for ark packages, daimon agents, sigil trust

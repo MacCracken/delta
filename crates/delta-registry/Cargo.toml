@@ -1,0 +1,21 @@
+[package]
+name = "delta-registry"
+description = "Artifact and package registry for Delta"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+delta-core = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+blake3 = { workspace = true }
+bytes = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -1,0 +1,16 @@
+# Delta configuration example
+# Copy to /etc/delta/config.toml or pass via --config
+
+[server]
+host = "127.0.0.1"
+port = 8070
+api_prefix = "/api/v1"
+
+[storage]
+repos_dir = "/var/lib/delta/repos"
+artifacts_dir = "/var/lib/delta/artifacts"
+db_url = "sqlite:///var/lib/delta/delta.db"
+
+[auth]
+enabled = true
+token_expiry_secs = 86400
