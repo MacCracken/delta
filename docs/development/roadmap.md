@@ -33,15 +33,20 @@ Full git push/pull support over HTTP.
 - [ ] Shallow clone and partial clone support
 - [ ] Repository forking and mirroring
 
-## Phase 3 — Code Review
+## Phase 3 — Code Review (Complete)
 
 Pull/merge request workflow with review tooling.
 
-- [ ] Pull request model (create, update, merge, close)
-- [ ] Diff rendering and file-level comments
-- [ ] Review states (approve, request changes, comment)
-- [ ] Merge strategies (merge commit, squash, rebase)
-- [ ] Status checks integration (block merge on failure)
+- [x] Pull request model (create, update, merge, close, reopen)
+- [x] PR numbering (auto-incrementing per repo)
+- [x] Diff generation between branches (unified diff, stat, file list)
+- [x] Commit listing between base and head
+- [x] File-level inline comments (path, line, side)
+- [x] General conversation comments
+- [x] Review states (approve, request changes, comment)
+- [x] Merge strategies (merge commit, squash, rebase) via git worktree
+- [x] Status checks (create/update per commit, block merge on failure)
+- [x] Branch protection enforcement on merge (required approvals + status checks)
 - [ ] AI-assisted code review summaries
 - [ ] Agent-authored PRs with provenance tracking
 - [ ] Inline suggestions with one-click apply
