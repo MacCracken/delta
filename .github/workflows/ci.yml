@@ -48,7 +48,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: delta-${{ matrix.target }}
-          path: target/${{ matrix.use-cross && matrix.target || 'release' }}/delta-api
+          path: target/${{ matrix.use-cross == 'true' && format('{0}/release', matrix.target) || 'release' }}/delta-api
           retention-days: 7
 
   quality:

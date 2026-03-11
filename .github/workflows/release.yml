@@ -102,19 +102,20 @@ jobs:
         run: |
           cargo cyclonedx --format json --override-filename delta-sbom
           cargo cyclonedx --format xml --override-filename delta-sbom
+          # cargo-cyclonedx outputs per-crate; collect into top-level
+          mkdir -p sbom-out
+          find . -name 'delta-sbom*' -not -path './sbom-out/*' -exec cp {} sbom-out/ \;
 
       - name: Generate license report
         run: |
-          cargo license --json > delta-licenses.json
-          cargo license > delta-licenses.txt
+          cargo license --json > sbom-out/delta-licenses.json
+          cargo license > sbom-out/delta-licenses.txt
 
       - name: Upload SBOM
         uses: actions/upload-artifact@v4
         with:
           name: sbom
-          path: |
-            delta-sbom.*
-            delta-licenses.*
+          path: sbom-out/
           retention-days: 90
 
   create-release:
@@ -132,17 +133,19 @@ jobs:
           RAW=$(cat VERSION)
           echo "version=${RAW}" >> "$GITHUB_OUTPUT"
           # Build number: YYYY.M.D-N -> YYYYMMDDN, YYYY.M.D -> YYYYMMDD
-          BUILD=$(echo "$RAW" | sed -E 's/^([0-9]{4})\.([0-9]{1,2})\.([0-9]{1,2})(-([0-9]+))?$/printf "%04d%02d%02d%s" \1 \2 \3 \5/e')
+          IFS='.-' read -r YEAR MONTH DAY PATCH <<< "$RAW"
+          BUILD=$(printf "%04d%02d%02d%s" "$YEAR" "$MONTH" "$DAY" "${PATCH:-}")
           echo "build=${BUILD}" >> "$GITHUB_OUTPUT"
 
       - name: Generate changelog
         id: changelog
         run: |
-          PREV_TAG=$(git tag --sort=-version:refname | head -2 | tail -1)
-          if [ -z "$PREV_TAG" ]; then
-            CHANGELOG=$(git log --oneline --no-decorate)
-          else
+          TAG_COUNT=$(git tag --sort=-version:refname | wc -l)
+          if [ "$TAG_COUNT" -ge 2 ]; then
+            PREV_TAG=$(git tag --sort=-version:refname | sed -n '2p')
             CHANGELOG=$(git log --oneline --no-decorate "${PREV_TAG}..HEAD")
+          else
+            CHANGELOG=$(git log --oneline --no-decorate)
           fi
           echo "changelog<<EOF" >> "$GITHUB_OUTPUT"
           echo "$CHANGELOG" >> "$GITHUB_OUTPUT"
@@ -192,7 +195,8 @@ jobs:
         run: |
           RAW=$(cat VERSION)
           echo "version=${RAW}" >> "$GITHUB_OUTPUT"
-          BUILD=$(echo "$RAW" | sed -E 's/^([0-9]{4})\.([0-9]{1,2})\.([0-9]{1,2})(-([0-9]+))?$/printf "%04d%02d%02d%s" \1 \2 \3 \5/e')
+          IFS='.-' read -r YEAR MONTH DAY PATCH <<< "$RAW"
+          BUILD=$(printf "%04d%02d%02d%s" "$YEAR" "$MONTH" "$DAY" "${PATCH:-}")
           echo "build=${BUILD}" >> "$GITHUB_OUTPUT"
           # Docker requires lowercase repository names
           echo "image_name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"

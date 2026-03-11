@@ -262,7 +262,7 @@ async fn set_secret(
     Path((owner, name)): Path<(String, String)>,
     AuthUser(user): AuthUser,
     Json(req): Json<SetSecretRequest>,
-) -> Result<StatusCode, (StatusCode, String)> {
+) -> Result<(StatusCode, Json<SecretResponse>), (StatusCode, String)> {
     // Validate secret name: 1-256 chars, alphanumeric/underscores/hyphens
     if req.name.is_empty()
         || req.name.len() > 256
@@ -289,7 +289,8 @@ async fn set_secret(
     }
     let encryption_key = delta_core::crypto::derive_key(&state.config.auth.secrets_key);
     let encrypted = delta_core::crypto::encrypt(&encryption_key, req.value.as_bytes());
-    db::secret::set(&state.db, &repo.id.to_string(), &req.name, &encrypted)
+    let repo_id = repo.id.to_string();
+    db::secret::set(&state.db, &repo_id, &req.name, &encrypted)
         .await
         .map_err(|e| {
             tracing::error!("failed to set secret: {}", e);
@@ -298,7 +299,28 @@ async fn set_secret(
                 "internal server error".into(),
             )
         })?;
-    Ok(StatusCode::NO_CONTENT)
+
+    // Retrieve the saved secret metadata for the response
+    let secrets = db::secret::list(&state.db, &repo_id).await.map_err(|e| {
+        tracing::error!("failed to list secrets: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal server error".into(),
+        )
+    })?;
+    let saved = secrets.into_iter().find(|s| s.name == req.name).ok_or((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "secret saved but not found".into(),
+    ))?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(SecretResponse {
+            name: saved.name,
+            created_at: saved.created_at,
+            updated_at: saved.updated_at,
+        }),
+    ))
 }
 
 async fn delete_secret(

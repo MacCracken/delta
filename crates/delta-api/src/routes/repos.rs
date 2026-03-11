@@ -128,6 +128,18 @@ async fn create_repo(
         tracing::warn!("failed to init bare repo on disk: {}", e);
     }
 
+    // Audit: repo creation
+    let _ = delta_core::db::audit::log(
+        &state.db,
+        Some(&user_id),
+        "create",
+        "repository",
+        Some(&repo.id.to_string()),
+        Some(&format!("{}/{}", user.username, req.name)),
+        None,
+    )
+    .await;
+
     Ok((
         StatusCode::CREATED,
         Json(RepoResponse::from_repo(repo, &user.username)),
@@ -251,6 +263,18 @@ async fn delete_repo(
     if let Err(e) = state.repo_host.delete(&owner, &name) {
         tracing::warn!("failed to delete repo from disk: {}", e);
     }
+
+    // Audit: repo deletion
+    let _ = delta_core::db::audit::log(
+        &state.db,
+        Some(&user.id.to_string()),
+        "delete",
+        "repository",
+        Some(&repo.id.to_string()),
+        Some(&format!("{}/{}", owner, name)),
+        None,
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }

@@ -235,3 +235,56 @@ async fn test_password_hash_lookup() {
     assert!(!id.is_empty());
     assert_eq!(hash, "hashedpw");
 }
+
+#[tokio::test]
+async fn test_list_tokens() {
+    let pool = setup_pool().await;
+    let user = create_test_user(&pool).await;
+    let uid = user.id.to_string();
+
+    // Initially empty
+    let tokens = db::user::list_tokens(&pool, &uid).await.unwrap();
+    assert!(tokens.is_empty());
+
+    // Create two tokens
+    db::user::create_token(&pool, &uid, "token-a", "hash_a", "*", None)
+        .await
+        .unwrap();
+    db::user::create_token(&pool, &uid, "token-b", "hash_b", "read", None)
+        .await
+        .unwrap();
+
+    let tokens = db::user::list_tokens(&pool, &uid).await.unwrap();
+    assert_eq!(tokens.len(), 2);
+    // Most recent first
+    assert_eq!(tokens[0].name, "token-b");
+    assert_eq!(tokens[1].name, "token-a");
+    assert_eq!(tokens[1].scopes, "*");
+    assert_eq!(tokens[0].scopes, "read");
+}
+
+#[tokio::test]
+async fn test_list_tokens_excludes_other_users() {
+    let pool = setup_pool().await;
+    let user1 = create_test_user(&pool).await;
+    let user2 = db::user::create(&pool, "other", "other@example.com", "pw", false)
+        .await
+        .unwrap();
+    let uid1 = user1.id.to_string();
+    let uid2 = user2.id.to_string();
+
+    db::user::create_token(&pool, &uid1, "u1-token", "h1", "*", None)
+        .await
+        .unwrap();
+    db::user::create_token(&pool, &uid2, "u2-token", "h2", "*", None)
+        .await
+        .unwrap();
+
+    let tokens1 = db::user::list_tokens(&pool, &uid1).await.unwrap();
+    assert_eq!(tokens1.len(), 1);
+    assert_eq!(tokens1[0].name, "u1-token");
+
+    let tokens2 = db::user::list_tokens(&pool, &uid2).await.unwrap();
+    assert_eq!(tokens2.len(), 1);
+    assert_eq!(tokens2[0].name, "u2-token");
+}

@@ -19,6 +19,8 @@ services:
       timeout: 5s
       start_period: 10s
       retries: 3
+    profiles:
+      - prod
 
   delta-dev:
     build:
@@ -30,6 +32,9 @@ services:
     volumes:
       - ..:/workspace
       - cargo-cache:/root/.cargo/registry
+      - delta-repos:/var/lib/delta/repos
+      - delta-artifacts:/var/lib/delta/artifacts
+      - delta-data:/var/lib/delta
     environment:
       - RUST_LOG=debug
     profiles:

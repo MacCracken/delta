@@ -12,6 +12,8 @@ pub mod webhook;
 
 use crate::Result;
 use sqlx::SqlitePool;
+use sqlx::sqlite::SqliteConnectOptions;
+use std::str::FromStr;
 
 /// Initialize the database connection pool and run migrations.
 pub async fn init_pool(db_url: &str) -> Result<SqlitePool> {
@@ -24,7 +26,11 @@ pub async fn init_pool(db_url: &str) -> Result<SqlitePool> {
         std::fs::create_dir_all(parent)?;
     }
 
-    let pool = SqlitePool::connect(db_url)
+    let options = SqliteConnectOptions::from_str(db_url)
+        .map_err(|e| crate::DeltaError::Storage(e.to_string()))?
+        .create_if_missing(true);
+
+    let pool = SqlitePool::connect_with(options)
         .await
         .map_err(|e| crate::DeltaError::Storage(e.to_string()))?;
 

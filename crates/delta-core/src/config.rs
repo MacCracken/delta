@@ -13,6 +13,9 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub api_prefix: String,
+    /// Allowed CORS origins. Empty list means allow any origin (dev only).
+    #[serde(default)]
+    pub cors_origins: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +46,7 @@ impl Default for DeltaConfig {
                 host: "127.0.0.1".into(),
                 port: 8070,
                 api_prefix: "/api/v1".into(),
+                cors_origins: vec![],
             },
             storage: StorageConfig {
                 repos_dir: PathBuf::from("/var/lib/delta/repos"),
@@ -67,6 +71,7 @@ mod tests {
         let config = DeltaConfig::default();
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.server.port, 8070);
+        assert!(config.server.cors_origins.is_empty());
         assert!(config.auth.enabled);
         assert_eq!(config.auth.token_expiry_secs, 86400);
         assert!(!config.auth.secrets_key.is_empty());
@@ -96,6 +101,50 @@ secrets_key = "test-key"
         assert!(!config.auth.enabled);
         assert_eq!(config.auth.token_expiry_secs, 3600);
         assert_eq!(config.auth.secrets_key, "test-key");
+    }
+
+    #[test]
+    fn test_config_cors_origins_from_toml() {
+        let toml_str = r#"
+[server]
+host = "0.0.0.0"
+port = 8070
+api_prefix = "/api/v1"
+cors_origins = ["https://delta.example.com", "https://admin.example.com"]
+
+[storage]
+repos_dir = "/tmp/repos"
+artifacts_dir = "/tmp/artifacts"
+db_url = "sqlite:///tmp/test.db"
+
+[auth]
+enabled = true
+token_expiry_secs = 86400
+"#;
+        let config: DeltaConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.server.cors_origins.len(), 2);
+        assert_eq!(config.server.cors_origins[0], "https://delta.example.com");
+    }
+
+    #[test]
+    fn test_config_cors_origins_defaults_empty() {
+        let toml_str = r#"
+[server]
+host = "0.0.0.0"
+port = 8070
+api_prefix = "/api/v1"
+
+[storage]
+repos_dir = "/tmp/repos"
+artifacts_dir = "/tmp/artifacts"
+db_url = "sqlite:///tmp/test.db"
+
+[auth]
+enabled = true
+token_expiry_secs = 86400
+"#;
+        let config: DeltaConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.server.cors_origins.is_empty());
     }
 
     #[test]

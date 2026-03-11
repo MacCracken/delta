@@ -135,6 +135,50 @@ pub async fn get_by_token_hash(pool: &SqlitePool, token_hash: &str) -> Result<Op
     }
 }
 
+/// List API tokens for a user (without revealing hashes).
+pub async fn list_tokens(pool: &SqlitePool, user_id: &str) -> Result<Vec<TokenInfo>> {
+    let rows = sqlx::query_as::<_, TokenInfoRow>(
+        "SELECT id, name, scopes, expires_at, last_used_at, created_at
+         FROM api_tokens WHERE user_id = ? ORDER BY created_at DESC",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| DeltaError::Storage(e.to_string()))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| TokenInfo {
+            id: r.id,
+            name: r.name,
+            scopes: r.scopes,
+            expires_at: r.expires_at,
+            last_used_at: r.last_used_at,
+            created_at: r.created_at,
+        })
+        .collect())
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TokenInfo {
+    pub id: String,
+    pub name: String,
+    pub scopes: String,
+    pub expires_at: Option<String>,
+    pub last_used_at: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct TokenInfoRow {
+    id: String,
+    name: String,
+    scopes: String,
+    expires_at: Option<String>,
+    last_used_at: Option<String>,
+    created_at: String,
+}
+
 /// Delete an API token.
 pub async fn delete_token(pool: &SqlitePool, token_id: &str, user_id: &str) -> Result<()> {
     let result = sqlx::query("DELETE FROM api_tokens WHERE id = ? AND user_id = ?")

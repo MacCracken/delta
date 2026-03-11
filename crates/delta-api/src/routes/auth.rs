@@ -1,4 +1,9 @@
-use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
+use axum::{
+    Json, Router,
+    extract::State,
+    http::StatusCode,
+    routing::{get, post},
+};
 use serde::{Deserialize, Serialize};
 
 use crate::auth;
@@ -9,7 +14,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/register", post(register))
         .route("/login", post(login))
-        .route("/tokens", post(create_token))
+        .route("/tokens", get(list_tokens).post(create_token))
+        .route("/tokens/{token_id}", axum::routing::delete(delete_token))
 }
 
 #[derive(Deserialize)]
@@ -95,6 +101,19 @@ async fn register(
         )
     })?;
 
+    // Audit: user registration
+    let user_id_str = user.id.to_string();
+    let _ = delta_core::db::audit::log(
+        &state.db,
+        Some(&user_id_str),
+        "register",
+        "user",
+        Some(&user_id_str),
+        None,
+        None,
+    )
+    .await;
+
     Ok((
         StatusCode::CREATED,
         Json(AuthResponse {
@@ -127,6 +146,19 @@ async fn login(
     )
     .await
     .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+
+    // Audit: login
+    let user_id_str = user.id.to_string();
+    let _ = delta_core::db::audit::log(
+        &state.db,
+        Some(&user_id_str),
+        "login",
+        "user",
+        Some(&user_id_str),
+        None,
+        None,
+    )
+    .await;
 
     Ok(Json(AuthResponse {
         user: UserResponse {
@@ -193,4 +225,31 @@ async fn create_token(
             token: raw_token,
         }),
     ))
+}
+
+async fn list_tokens(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> Result<Json<Vec<delta_core::db::user::TokenInfo>>, (StatusCode, String)> {
+    let tokens = delta_core::db::user::list_tokens(&state.db, &user.id.to_string())
+        .await
+        .map_err(|e| {
+            tracing::error!("failed to list tokens: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
+    Ok(Json(tokens))
+}
+
+async fn delete_token(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    axum::extract::Path(token_id): axum::extract::Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    delta_core::db::user::delete_token(&state.db, &token_id, &user.id.to_string())
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
 }

@@ -22,10 +22,21 @@ use serde::Deserialize;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
+    // Axum allows only one parameter per path segment, so we capture
+    // the full "{name}.git" as {repo} and strip the suffix in a helper.
+    //
+    // NOTE: These routes are merged at the top level (no prefix). The {repo}
+    // segment is expected to end in ".git" (e.g. "myrepo.git") which prevents
+    // collisions with the /api/v1/ and /health prefixed routes.
     Router::new()
-        .route("/{owner}/{name}.git/info/refs", get(info_refs))
-        .route("/{owner}/{name}.git/git-upload-pack", post(upload_pack))
-        .route("/{owner}/{name}.git/git-receive-pack", post(receive_pack))
+        .route("/{owner}/{repo}/info/refs", get(info_refs))
+        .route("/{owner}/{repo}/git-upload-pack", post(upload_pack))
+        .route("/{owner}/{repo}/git-receive-pack", post(receive_pack))
+}
+
+/// Strip the `.git` suffix from a repo path segment (e.g. "myrepo.git" → "myrepo").
+fn parse_repo_name(repo: &str) -> &str {
+    repo.strip_suffix(".git").unwrap_or(repo)
 }
 
 #[derive(Deserialize)]
@@ -35,14 +46,15 @@ struct InfoRefsQuery {
 
 async fn info_refs(
     State(state): State<AppState>,
-    Path((owner, name)): Path<(String, String)>,
+    Path((owner, repo)): Path<(String, String)>,
     Query(query): Query<InfoRefsQuery>,
     headers: HeaderMap,
 ) -> Result<Response, (StatusCode, String)> {
+    let name = parse_repo_name(&repo);
     // Check repo exists
     let repo_path = state
         .repo_host
-        .repo_path(&owner, &name)
+        .repo_path(&owner, name)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     if !repo_path.exists() {
         return Err((StatusCode::NOT_FOUND, "repository not found".into()));
@@ -55,7 +67,7 @@ async fn info_refs(
             .map_err(|e| (StatusCode::UNAUTHORIZED, e))?;
     } else {
         // For upload-pack (clone/fetch), check visibility
-        check_read_access(&state, &owner, &name, &headers).await?;
+        check_read_access(&state, &owner, name, &headers).await?;
     }
 
     let body = delta_vcs::protocol::advertise_refs(&repo_path, &query.service)
@@ -76,19 +88,20 @@ async fn info_refs(
 
 async fn upload_pack(
     State(state): State<AppState>,
-    Path((owner, name)): Path<(String, String)>,
+    Path((owner, repo)): Path<(String, String)>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, (StatusCode, String)> {
+    let name = parse_repo_name(&repo);
     let repo_path = state
         .repo_host
-        .repo_path(&owner, &name)
+        .repo_path(&owner, name)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     if !repo_path.exists() {
         return Err((StatusCode::NOT_FOUND, "repository not found".into()));
     }
 
-    check_read_access(&state, &owner, &name, &headers).await?;
+    check_read_access(&state, &owner, name, &headers).await?;
 
     let output = delta_vcs::protocol::upload_pack(&repo_path, &body)
         .await
@@ -107,13 +120,14 @@ async fn upload_pack(
 
 async fn receive_pack(
     State(state): State<AppState>,
-    Path((owner, name)): Path<(String, String)>,
+    Path((owner, repo)): Path<(String, String)>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, (StatusCode, String)> {
+    let name = parse_repo_name(&repo);
     let repo_path = state
         .repo_host
-        .repo_path(&owner, &name)
+        .repo_path(&owner, name)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     if !repo_path.exists() {
         return Err((StatusCode::NOT_FOUND, "repository not found".into()));
@@ -131,7 +145,7 @@ async fn receive_pack(
     // Fire webhooks and trigger pipelines asynchronously
     let db = state.db.clone();
     let owner_clone = owner.clone();
-    let name_clone = name.clone();
+    let name_clone = name.to_owned();
     let pusher = user;
     let repo_path_clone = repo_path.clone();
     let secrets_key = state.config.auth.secrets_key.clone();
@@ -412,6 +426,21 @@ async fn dispatch_push_pipelines(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_repo_name_with_git_suffix() {
+        assert_eq!(parse_repo_name("myrepo.git"), "myrepo");
+    }
+
+    #[test]
+    fn test_parse_repo_name_without_suffix() {
+        assert_eq!(parse_repo_name("myrepo"), "myrepo");
+    }
+
+    #[test]
+    fn test_parse_repo_name_double_git() {
+        assert_eq!(parse_repo_name("my.git.git"), "my.git");
+    }
 
     #[test]
     fn test_is_private_url_localhost() {

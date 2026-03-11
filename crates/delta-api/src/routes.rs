@@ -15,16 +15,31 @@ use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 
 pub fn router(state: AppState) -> Router {
-    let cors = CorsLayer::new()
-        .allow_methods([
-            axum::http::Method::GET,
-            axum::http::Method::POST,
-            axum::http::Method::PUT,
-            axum::http::Method::PATCH,
-            axum::http::Method::DELETE,
-        ])
-        .allow_headers(Any)
-        .allow_origin(Any);
+    let cors = {
+        let base = CorsLayer::new()
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::PUT,
+                axum::http::Method::PATCH,
+                axum::http::Method::DELETE,
+            ])
+            .allow_headers(Any);
+
+        if state.config.server.cors_origins.is_empty() {
+            tracing::warn!("CORS: allow_origin(Any) — set server.cors_origins in production");
+            base.allow_origin(Any)
+        } else {
+            let origins: Vec<axum::http::HeaderValue> = state
+                .config
+                .server
+                .cors_origins
+                .iter()
+                .filter_map(|o| o.parse().ok())
+                .collect();
+            base.allow_origin(origins)
+        }
+    };
 
     Router::new()
         .nest("/health", health::router())

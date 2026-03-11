@@ -5,6 +5,8 @@
 host = "127.0.0.1"
 port = 8070
 api_prefix = "/api/v1"
+# Restrict CORS origins in production (empty = allow any)
+cors_origins = ["https://delta.example.com"]
 
 [storage]
 repos_dir = "/var/lib/delta/repos"

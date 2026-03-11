@@ -38,6 +38,15 @@ async fn main() -> anyhow::Result<()> {
         config.server.port = port;
     }
 
+    if config.auth.secrets_key == "delta-change-me-in-production"
+        || config.auth.secrets_key == "change-me-to-a-strong-random-passphrase"
+    {
+        tracing::warn!(
+            "secrets_key is set to a default value — pipeline secrets are NOT secure. \
+             Set auth.secrets_key in your config file."
+        );
+    }
+
     let pool = db::init_pool(&config.storage.db_url).await?;
     let state = AppState::new(config.clone(), pool);
     let app = routes::router(state);

@@ -7,9 +7,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake pkg-config libssl-dev git build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Rust toolchain
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.85.0
+# Install Rust toolchain (pinned to stable)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
 ENV PATH="/root/.cargo/bin:${PATH}"
+# Prevent rustup from re-downloading the toolchain on every container start
+ENV RUSTUP_UPDATE_MODE=no-self-update
 
 RUN cargo install cargo-watch --locked
 
@@ -18,4 +20,8 @@ VOLUME /workspace
 
 EXPOSE 8070
 
-CMD ["cargo", "watch", "-x", "run --package delta-api"]
+# Override AGNOS resource limits for dev (next AGNOS version supports these env vars)
+ENV AGNOS_ULIMIT_VMEM=unlimited
+
+ENTRYPOINT []
+CMD ["cargo", "watch", "-x", "run --package delta-api -- --config /workspace/config/delta.dev.toml"]
