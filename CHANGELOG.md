@@ -6,6 +6,8 @@ Versioning follows [AGNOS CalVer](docs/development/versioning.md): `YYYY.M.D`.
 
 ## Unreleased
 
+## 2026.3.10-1
+
 ### Added
 - API token listing endpoint (`GET /api/v1/auth/tokens`)
 - API token deletion endpoint (`DELETE /api/v1/auth/tokens/{id}`)

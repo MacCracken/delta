@@ -536,7 +536,7 @@ dependencies = [
 
 [[package]]
 name = "delta-api"
-version = "2026.3.10"
+version = "2026.3.10-1"
 dependencies = [
  "anyhow",
  "argon2",
@@ -568,7 +568,7 @@ dependencies = [
 
 [[package]]
 name = "delta-ci"
-version = "2026.3.10"
+version = "2026.3.10-1"
 dependencies = [
  "chrono",
  "delta-core",
@@ -585,7 +585,7 @@ dependencies = [
 
 [[package]]
 name = "delta-core"
-version = "2026.3.10"
+version = "2026.3.10-1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "delta-registry"
-version = "2026.3.10"
+version = "2026.3.10-1"
 dependencies = [
  "blake3",
  "bytes",
@@ -623,7 +623,7 @@ dependencies = [
 
 [[package]]
 name = "delta-vcs"
-version = "2026.3.10"
+version = "2026.3.10-1"
 dependencies = [
  "blake3",
  "bytes",
@@ -638,7 +638,7 @@ dependencies = [
 
 [[package]]
 name = "delta-web"
-version = "2026.3.10"
+version = "2026.3.10-1"
 dependencies = [
  "delta-core",
  "serde",
