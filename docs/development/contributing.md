@@ -23,6 +23,17 @@ cargo fmt --all
 cargo run --bin delta-api -- --port 8070
 ```
 
+### Docker Development
+
+The dev container mounts the workspace and uses `cargo-watch` for live reload:
+
+```bash
+docker compose -f docker/docker-compose.yml --profile dev up --build
+```
+
+This starts the server on `localhost:8070` with auto-rebuild on code changes.
+The dev config is at `config/delta.dev.toml`.
+
 ## Conventions
 
 ### Code Style
@@ -34,11 +45,14 @@ cargo run --bin delta-api -- --port 8070
 ### Configuration
 - All configuration is TOML-based
 - Default config path: `/etc/delta/config.toml`
+- Dev config: `config/delta.dev.toml` (used by Docker dev container)
 - Example config: `config/delta.example.toml`
+- Key production settings: `auth.secrets_key` (encrypt pipeline secrets), `server.cors_origins` (restrict CORS)
 
 ### Version Scheme
-- Semver (`0.x.y`) during development
-- AGNOS ecosystem version alignment after 1.0
+- AGNOS CalVer: `YYYY.M.D` (e.g. `2026.3.10`)
+- Same-day patches: `YYYY.M.D-N` (e.g. `2026.3.10-1`)
+- See [versioning.md](versioning.md) for details
 
 ### Commit Messages
 - Use conventional commit style: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`

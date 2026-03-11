@@ -43,18 +43,28 @@ cargo build
 cargo run --bin delta-api -- --port 8070
 
 # Run tests
-cargo test
+cargo test --workspace
+
+# Docker (development)
+docker compose -f docker/docker-compose.yml --profile dev up --build
+
+# Docker (production)
+docker compose -f docker/docker-compose.yml --profile prod up --build
 ```
 
 ## Configuration
 
 Delta uses TOML configuration. Default location: `/etc/delta/config.toml`
 
+See `config/delta.example.toml` for all options.
+
 ```toml
 [server]
 host = "127.0.0.1"
 port = 8070
 api_prefix = "/api/v1"
+# Restrict CORS origins in production (empty = allow any)
+cors_origins = ["https://delta.example.com"]
 
 [storage]
 repos_dir = "/var/lib/delta/repos"
@@ -64,7 +74,31 @@ db_url = "sqlite:///var/lib/delta/delta.db"
 [auth]
 enabled = true
 token_expiry_secs = 86400
+# IMPORTANT: Change this in production — used to encrypt pipeline secrets
+secrets_key = "your-strong-random-passphrase"
 ```
+
+## API
+
+Base URL: `http://localhost:8070/api/v1`
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /auth/register` | Register a user |
+| `POST /auth/login` | Login and get a token |
+| `GET /auth/tokens` | List API tokens |
+| `POST /auth/tokens` | Create an API token |
+| `DELETE /auth/tokens/{id}` | Delete an API token |
+| `GET /repos` | List repositories |
+| `POST /repos` | Create a repository |
+| `GET /repos/{owner}/{name}` | Get a repository |
+| `GET /repos/{owner}/{name}/branches` | List branches |
+| `GET /repos/{owner}/{name}/pulls` | List pull requests |
+| `GET /repos/{owner}/{name}/pipelines` | List CI pipelines |
+| `GET /repos/{owner}/{name}/artifacts` | List artifacts |
+| `GET /audit` | View audit log |
+
+Git smart HTTP transport: `/{owner}/{repo}.git/info/refs`
 
 ## Design Principles
 

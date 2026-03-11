@@ -4,6 +4,32 @@ All notable changes to Delta are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 Versioning follows [AGNOS CalVer](docs/development/versioning.md): `YYYY.M.D`.
 
+## Unreleased
+
+### Added
+- API token listing endpoint (`GET /api/v1/auth/tokens`)
+- API token deletion endpoint (`DELETE /api/v1/auth/tokens/{id}`)
+- Audit logging wired to key operations (register, login, repo create/delete)
+- Configurable CORS origins via `server.cors_origins` config field
+- Startup warnings for insecure defaults (secrets_key, CORS allow-any)
+- Secret creation now returns a JSON response body (was 204 No Content)
+- Docker dev container with cargo-watch live reload (`--profile dev`)
+- Dev config file (`config/delta.dev.toml`)
+
+### Fixed
+- SQLite database auto-creation (`create_if_missing`) — no longer requires pre-existing DB file
+- Git smart HTTP routes panic — Axum single-param-per-segment constraint
+- CI workflow: cross-compiled binary artifact path missing `/release/` directory
+- Release workflow: replaced unsafe `sed -E /e` shell execution with portable bash
+- Release workflow: changelog generation on first-ever tag
+- Release workflow: SBOM file collection from per-crate output
+- Docker dev container: AGNOS entrypoint `ulimit -v 2097152` causing rustup OOM
+
+### Changed
+- Docker compose: production service now requires `--profile prod`
+- Docker dev: set `AGNOS_ULIMIT_VMEM=unlimited` for next AGNOS version compatibility
+- Docker dev: `RUSTUP_UPDATE_MODE=no-self-update` to avoid toolchain re-download on restart
+
 ## 2026.3.10
 
 ### Added

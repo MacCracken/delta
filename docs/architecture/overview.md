@@ -43,6 +43,9 @@ HTTP API server built on `axum`. The primary interface for clients, agents, and 
 - REST endpoints for all platform operations
 - Binary entry point: `delta-api`
 - Default port: 8070
+- Configurable CORS origins (defaults to allow-any with a startup warning)
+- Audit logging on key operations (register, login, repo create/delete)
+- Startup warnings for insecure defaults (secrets_key, CORS)
 
 ### delta-ci
 CI/CD pipeline engine. Parses workflow definitions and executes build/test/deploy pipelines.
