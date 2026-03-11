@@ -28,7 +28,7 @@ RUN mkdir -p /var/lib/delta/repos \
     && chown -R delta:delta /var/lib/delta /etc/delta
 
 COPY --from=builder /build/target/release/delta-api /usr/local/bin/delta-server
-COPY config/delta.example.toml /etc/delta/config.toml
+COPY config/delta.docker.toml /etc/delta/config.toml
 
 USER delta
 WORKDIR /var/lib/delta
