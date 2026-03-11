@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-RUN groupadd -r delta && useradd -r -g delta -d /var/lib/delta -s /usr/sbin/nologin delta
+RUN groupadd -g 1003 delta && useradd -u 1003 -g delta -d /var/lib/delta -s /usr/sbin/nologin delta
 
 RUN mkdir -p /var/lib/delta/repos \
              /var/lib/delta/artifacts \
