@@ -98,6 +98,39 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> Result<()> {
 }
 
 #[derive(sqlx::FromRow)]
+pub(crate) struct ArtifactRowPub {
+    pub id: String,
+    pub repo_id: String,
+    pub pipeline_id: Option<String>,
+    pub name: String,
+    pub version: Option<String>,
+    pub artifact_type: String,
+    pub content_hash: String,
+    pub size_bytes: i64,
+    pub metadata: Option<String>,
+    pub download_count: i64,
+    pub created_at: String,
+}
+
+impl ArtifactRowPub {
+    pub fn into_artifact(self) -> Artifact {
+        Artifact {
+            id: self.id,
+            repo_id: self.repo_id,
+            pipeline_id: self.pipeline_id,
+            name: self.name,
+            version: self.version,
+            artifact_type: self.artifact_type,
+            content_hash: self.content_hash,
+            size_bytes: self.size_bytes,
+            metadata: self.metadata,
+            download_count: self.download_count,
+            created_at: self.created_at,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
 struct ArtifactRow {
     id: String,
     repo_id: String,

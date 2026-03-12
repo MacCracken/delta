@@ -6,6 +6,34 @@ Versioning follows [AGNOS CalVer](docs/development/versioning.md): `YYYY.M.D`.
 
 ## Unreleased
 
+## 2026.3.11
+
+### Added
+
+#### Phase 5 — Artifact Registry (Complete)
+- `.ark` package registry — publish, download, search, list versions for AGNOS native packages (`/api/v1/registry/ark/`)
+- OCI container image registry — OCI Distribution Spec endpoints for push/pull images (`/v2/`)
+  - Blob upload (monolithic and chunked), manifest push/pull, tag management
+  - sha256 digest verification, content-addressable storage via BlobStore
+- Artifact retention policies — per-repo configurable rules (max age, max count, max total size)
+  - Cleanup endpoint (`PUT /{owner}/{name}/artifacts/cleanup`) with global config fallback
+  - `[registry]` config section for global defaults
+- Signed artifacts with ed25519 verification
+  - User signing key management (`/api/v1/auth/signing-keys`)
+  - Artifact signature upload and verification (`/artifacts/{id}/signatures`, `/artifacts/{id}/verify`)
+  - Signatures verified against content hash before storage
+- Download statistics and audit trail
+  - Per-download event tracking with user-agent and IP logging
+  - Daily download count aggregation endpoint (`/artifacts/{id}/stats`)
+  - Audit log entries on artifact download
+- Database migration `005_registry.sql` — tables for retention policies, download events, signing keys, artifact signatures, ark packages, OCI manifests/tags/blobs/uploads
+- Dedicated Docker config file (`config/delta.docker.toml`) — binds `0.0.0.0`, SQLite under `/var/lib/delta`
+
+### Changed
+- Dockerfile: pinned `delta` user/group to UID/GID 1003 for consistent volume permissions
+- Dockerfile: copies `delta.docker.toml` instead of `delta.example.toml`
+- Documentation updates (README, architecture overview, contributing guide, roadmap)
+
 ## 2026.3.10-1
 
 ### Added

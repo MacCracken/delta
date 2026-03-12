@@ -16,6 +16,10 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
+ed25519-dalek = { workspace = true }
+sha2 = { workspace = true }
+hex = "0.4"
+sqlx = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

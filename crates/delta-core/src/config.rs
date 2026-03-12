@@ -6,6 +6,8 @@ pub struct DeltaConfig {
     pub server: ServerConfig,
     pub storage: StorageConfig,
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub registry: RegistryConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +37,16 @@ pub struct AuthConfig {
     pub secrets_key: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RegistryConfig {
+    /// Maximum age in days before artifacts are eligible for cleanup.
+    pub max_artifact_age_days: Option<u32>,
+    /// Maximum number of artifacts per repository.
+    pub max_artifacts_per_repo: Option<u32>,
+    /// Maximum total artifact bytes per repository.
+    pub max_total_bytes_per_repo: Option<u64>,
+}
+
 fn default_secrets_key() -> String {
     "delta-change-me-in-production".into()
 }
@@ -58,6 +70,7 @@ impl Default for DeltaConfig {
                 token_expiry_secs: 86400,
                 secrets_key: default_secrets_key(),
             },
+            registry: RegistryConfig::default(),
         }
     }
 }

@@ -2,7 +2,7 @@
 
 Delta is a code hosting platform providing version control, CI/CD, and artifact registry — built for the AGNOS ecosystem.
 
-Phases 1–4 are complete. Only remaining work is listed below.
+Phases 1–5 are complete. Only remaining work is listed below.
 
 ## Phase 2 — Git Protocol (Remaining)
 
@@ -28,13 +28,13 @@ Phases 1–4 are complete. Only remaining work is listed below.
 - [ ] Matrix builds (multiple OS/arch/toolchain)
 - [ ] Pipeline status badges
 
-## Phase 5 — Artifact Registry (In Progress)
+## Phase 5 — Artifact Registry (Complete)
 
-- [ ] `.ark` package registry (AGNOS native packages)
-- [ ] Container image registry (OCI-compatible)
-- [ ] Artifact retention policies and cleanup
-- [ ] Signed artifacts with ed25519 verification
-- [ ] Download statistics and audit trail
+- [x] `.ark` package registry (AGNOS native packages)
+- [x] Container image registry (OCI-compatible)
+- [x] Artifact retention policies and cleanup
+- [x] Signed artifacts with ed25519 verification
+- [x] Download statistics and audit trail
 
 ## Phase 6 — Web Interface
 

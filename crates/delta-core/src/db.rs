@@ -1,11 +1,16 @@
+pub mod ark_package;
 pub mod artifact;
 pub mod audit;
 pub mod branch_protection;
+pub mod download_stats;
+pub mod oci;
 pub mod pipeline;
 pub mod pull_request;
 pub mod release;
 pub mod repo;
+pub mod retention;
 pub mod secret;
+pub mod signing;
 pub mod status_check;
 pub mod user;
 pub mod webhook;
@@ -40,6 +45,7 @@ pub async fn init_pool(db_url: &str) -> Result<SqlitePool> {
         include_str!("../migrations/002_git_protocol.sql"),
         include_str!("../migrations/003_pull_requests.sql"),
         include_str!("../migrations/004_cicd.sql"),
+        include_str!("../migrations/005_registry.sql"),
     ] {
         sqlx::query(migration)
             .execute(&pool)
