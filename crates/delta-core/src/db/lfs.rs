@@ -25,12 +25,7 @@ impl LfsRow {
 }
 
 /// Record an LFS object in the database.
-pub async fn create(
-    pool: &SqlitePool,
-    repo_id: &str,
-    oid: &str,
-    size: i64,
-) -> Result<LfsObject> {
+pub async fn create(pool: &SqlitePool, repo_id: &str, oid: &str, size: i64) -> Result<LfsObject> {
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
 

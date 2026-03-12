@@ -69,10 +69,7 @@ async fn register(
         || req.email.contains("..")
         || req.email.contains('\0')
     {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "invalid email address".into(),
-        ));
+        return Err((StatusCode::BAD_REQUEST, "invalid email address".into()));
     }
     if req.password.len() < 8 {
         return Err((
@@ -225,10 +222,7 @@ async fn create_token(
     for scope in req.scopes.split(',') {
         let s = scope.trim();
         if !VALID_SCOPES.contains(&s) {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                format!("invalid scope: {}", s),
-            ));
+            return Err((StatusCode::BAD_REQUEST, format!("invalid scope: {}", s)));
         }
     }
 

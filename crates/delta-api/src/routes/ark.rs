@@ -17,18 +17,14 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/ark", get(search_packages))
-        .route(
-            "/ark/{name}",
-            get(list_versions),
-        )
+        .route("/ark/{name}", get(list_versions))
         .route(
             "/ark/{name}/{version}",
-            get(download_package).put(publish_package).delete(delete_package),
+            get(download_package)
+                .put(publish_package)
+                .delete(delete_package),
         )
-        .route(
-            "/ark/{name}/{version}/meta",
-            get(get_metadata),
-        )
+        .route("/ark/{name}/{version}/meta", get(get_metadata))
 }
 
 #[derive(Deserialize)]
@@ -50,7 +46,10 @@ async fn search_packages(
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<Vec<db::ark_package::ArkPackage>>, (StatusCode, String)> {
     if query.q.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "query parameter 'q' required".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "query parameter 'q' required".into(),
+        ));
     }
     let packages = db::ark_package::search(&state.db, &query.q, query.limit, query.offset)
         .await
@@ -151,11 +150,13 @@ async fn publish_package(
     }
 
     // Validate package name
-    if name.is_empty() || name.len() > 128 || !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "invalid package name".into(),
-        ));
+    if name.is_empty()
+        || name.len() > 128
+        || !name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err((StatusCode::BAD_REQUEST, "invalid package name".into()));
     }
 
     // User needs at least one repo to publish to — use first repo they own

@@ -235,15 +235,11 @@ async fn authenticate_git_request(
         .await
         .unwrap_or(None);
         match role {
-            Some(r)
-                if r.has(delta_core::models::collaborator::CollaboratorRole::Write) =>
-            {
+            Some(r) if r.has(delta_core::models::collaborator::CollaboratorRole::Write) => {
                 // Collaborator with write access — allowed
             }
             _ => {
-                return Err(
-                    "you don't have push access to this repository".to_string(),
-                );
+                return Err("you don't have push access to this repository".to_string());
             }
         }
     }

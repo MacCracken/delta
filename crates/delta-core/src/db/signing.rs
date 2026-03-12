@@ -92,13 +92,12 @@ pub async fn get_signing_key(pool: &SqlitePool, key_id: &str) -> Result<SigningK
 }
 
 pub async fn delete_signing_key(pool: &SqlitePool, key_id: &str, user_id: &str) -> Result<()> {
-    let result =
-        sqlx::query("DELETE FROM user_signing_keys WHERE id = ? AND user_id = ?")
-            .bind(key_id)
-            .bind(user_id)
-            .execute(pool)
-            .await
-            .map_err(|e| DeltaError::Registry(e.to_string()))?;
+    let result = sqlx::query("DELETE FROM user_signing_keys WHERE id = ? AND user_id = ?")
+        .bind(key_id)
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .map_err(|e| DeltaError::Registry(e.to_string()))?;
     if result.rows_affected() == 0 {
         return Err(DeltaError::Registry("signing key not found".into()));
     }

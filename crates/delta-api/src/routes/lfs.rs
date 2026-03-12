@@ -7,13 +7,12 @@
 //!   POST /{owner}/{repo}.git/info/lfs/objects/verify
 
 use axum::{
-    Router,
+    Json, Router,
     body::Bytes,
     extract::{Path, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json,
 };
 use delta_core::db;
 use serde::{Deserialize, Serialize};
@@ -22,14 +21,8 @@ use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route(
-            "/{owner}/{repo}/info/lfs/objects/batch",
-            post(batch),
-        )
-        .route(
-            "/{owner}/{repo}/info/lfs/objects/verify",
-            post(verify),
-        )
+        .route("/{owner}/{repo}/info/lfs/objects/batch", post(batch))
+        .route("/{owner}/{repo}/info/lfs/objects/verify", post(verify))
         .route(
             "/{owner}/{repo}/info/lfs/objects/{oid}",
             get(download).put(upload),
@@ -133,10 +126,7 @@ async fn batch(
     };
 
     // Build base URL for object actions
-    let base_url = format!(
-        "/{}/{}/info/lfs/objects",
-        owner, repo
-    );
+    let base_url = format!("/{}/{}/info/lfs/objects", owner, repo);
 
     // Forward auth header for action URLs
     let auth_header = headers
@@ -239,10 +229,7 @@ async fn batch(
                                 expires_in: 3600,
                             }),
                             verify: Some(BatchAction {
-                                href: format!(
-                                    "/{}/{}/info/lfs/objects/verify",
-                                    owner, repo
-                                ),
+                                href: format!("/{}/{}/info/lfs/objects/verify", owner, repo),
                                 header: header_map,
                                 expires_in: 3600,
                             }),
@@ -316,8 +303,7 @@ async fn upload(
 ) -> Result<Response, (StatusCode, String)> {
     let name = parse_repo_name(&repo);
 
-    let (repo_record, _) =
-        resolve_repo_and_auth_write(&state, &headers, &owner, name).await?;
+    let (repo_record, _) = resolve_repo_and_auth_write(&state, &headers, &owner, name).await?;
     let repo_id = repo_record.id.to_string();
 
     if !delta_registry::lfs_store::validate_oid(&oid) {
@@ -405,13 +391,10 @@ async fn resolve_repo_and_auth(
 
     let is_owner = user.username == owner;
     if !is_owner {
-        let role = db::collaborator::get_role(
-            &state.db,
-            &repo.id.to_string(),
-            &user.id.to_string(),
-        )
-        .await
-        .unwrap_or(None);
+        let role =
+            db::collaborator::get_role(&state.db, &repo.id.to_string(), &user.id.to_string())
+                .await
+                .unwrap_or(None);
         if role.is_none() {
             return Err((StatusCode::NOT_FOUND, "repository not found".into()));
         }
@@ -442,17 +425,12 @@ async fn resolve_repo_and_auth_write(
 
     let is_owner = user.username == owner;
     if !is_owner {
-        let role = db::collaborator::get_role(
-            &state.db,
-            &repo.id.to_string(),
-            &user.id.to_string(),
-        )
-        .await
-        .unwrap_or(None);
+        let role =
+            db::collaborator::get_role(&state.db, &repo.id.to_string(), &user.id.to_string())
+                .await
+                .unwrap_or(None);
         match role {
-            Some(r)
-                if r.has(delta_core::models::collaborator::CollaboratorRole::Write) =>
-            {
+            Some(r) if r.has(delta_core::models::collaborator::CollaboratorRole::Write) => {
                 // allowed
             }
             _ => {
@@ -471,7 +449,8 @@ async fn resolve_repo_and_auth_write(
 fn authenticate_lfs_user(
     state: &AppState,
     headers: &HeaderMap,
-) -> impl std::future::Future<Output = std::result::Result<delta_core::models::user::User, String>> + Send {
+) -> impl std::future::Future<Output = std::result::Result<delta_core::models::user::User, String>> + Send
+{
     let auth_header = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -489,9 +468,7 @@ fn authenticate_lfs_user(
                 .map_err(|_| "invalid or expired token".to_string());
         }
 
-        let credentials = auth
-            .strip_prefix("Basic ")
-            .ok_or("invalid auth format")?;
+        let credentials = auth.strip_prefix("Basic ").ok_or("invalid auth format")?;
 
         let decoded =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, credentials)

@@ -125,3 +125,126 @@ impl RepoHost {
         Ok(repos)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_repo_path_valid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let host = RepoHost::new(tmp.path());
+        let path = host.repo_path("alice", "myrepo").unwrap();
+        assert!(path.ends_with("alice/myrepo.git"));
+    }
+
+    #[test]
+    fn test_repo_path_rejects_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let host = RepoHost::new(tmp.path());
+        assert!(host.repo_path("..", "myrepo").is_err());
+        assert!(host.repo_path("alice", "..").is_err());
+        assert!(host.repo_path("alice/../bob", "repo").is_err());
+    }
+
+    #[test]
+    fn test_init_bare_and_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let host = RepoHost::new(tmp.path());
+
+        assert!(!host.exists("alice", "myrepo"));
+
+        host.init_bare("alice", "myrepo").unwrap();
+
+        assert!(host.exists("alice", "myrepo"));
+    }
+
+    #[test]
+    fn test_init_bare_duplicate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let host = RepoHost::new(tmp.path());
+
+        host.init_bare("alice", "firstrepo").unwrap();
+        let result = host.init_bare("alice", "firstrepo");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_delete_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let host = RepoHost::new(tmp.path());
+
+        host.init_bare("alice", "todelete").unwrap();
+        assert!(host.exists("alice", "todelete"));
+
+        host.delete("alice", "todelete").unwrap();
+        assert!(!host.exists("alice", "todelete"));
+    }
+
+    #[test]
+    fn test_delete_nonexistent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let host = RepoHost::new(tmp.path());
+
+        let result = host.delete("alice", "nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_list_repos_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let host = RepoHost::new(tmp.path());
+
+        let repos = host.list_repos("alice").unwrap();
+        assert!(repos.is_empty());
+    }
+
+    #[test]
+    fn test_list_repos() {
+        let tmp = tempfile::tempdir().unwrap();
+        let host = RepoHost::new(tmp.path());
+
+        host.init_bare("alice", "repo1").unwrap();
+        host.init_bare("alice", "repo2").unwrap();
+        host.init_bare("bob", "other").unwrap();
+
+        let mut repos = host.list_repos("alice").unwrap();
+        repos.sort();
+        assert_eq!(repos, vec!["repo1", "repo2"]);
+
+        let repos = host.list_repos("bob").unwrap();
+        assert_eq!(repos, vec!["other"]);
+    }
+
+    #[test]
+    fn test_clone_bare() {
+        let tmp = tempfile::tempdir().unwrap();
+        let host = RepoHost::new(tmp.path());
+
+        host.init_bare("alice", "source").unwrap();
+        host.clone_bare("alice", "source", "bob", "fork").unwrap();
+
+        assert!(host.exists("bob", "fork"));
+    }
+
+    #[test]
+    fn test_clone_bare_src_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let host = RepoHost::new(tmp.path());
+
+        let result = host.clone_bare("alice", "nope", "bob", "fork");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_clone_bare_dst_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let host = RepoHost::new(tmp.path());
+
+        host.init_bare("alice", "source").unwrap();
+        host.init_bare("bob", "existing").unwrap();
+
+        let result = host.clone_bare("alice", "source", "bob", "existing");
+        assert!(result.is_err());
+    }
+}

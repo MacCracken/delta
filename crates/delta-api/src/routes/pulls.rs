@@ -287,7 +287,10 @@ async fn update_pull(
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
 
     if pr.state != PrState::Open {
-        return Err((StatusCode::CONFLICT, "can only update open pull requests".into()));
+        return Err((
+            StatusCode::CONFLICT,
+            "can only update open pull requests".into(),
+        ));
     }
 
     // Validate input lengths
@@ -792,7 +795,71 @@ fn is_valid_branch_name(name: &str) -> bool {
         && !name.ends_with('.')
         && !name.ends_with('/')
         && !name.starts_with('-')
-        && !name.chars().any(|c| {
-            c.is_control() || matches!(c, ' ' | '~' | '^' | ':' | '\\' | '?' | '*' | '[')
-        })
+        && !name
+            .chars()
+            .any(|c| c.is_control() || matches!(c, ' ' | '~' | '^' | ':' | '\\' | '?' | '*' | '['))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_branch_names() {
+        assert!(is_valid_branch_name("main"));
+        assert!(is_valid_branch_name("feature/my-feature"));
+        assert!(is_valid_branch_name("release/v1.0.0"));
+        assert!(is_valid_branch_name("fix/bug-123"));
+        assert!(is_valid_branch_name("a"));
+        assert!(is_valid_branch_name("refs/heads/main"));
+    }
+
+    #[test]
+    fn test_invalid_branch_null_byte() {
+        assert!(!is_valid_branch_name("main\0"));
+        assert!(!is_valid_branch_name("fea\0ture"));
+    }
+
+    #[test]
+    fn test_invalid_branch_double_dot() {
+        assert!(!is_valid_branch_name("main..dev"));
+        assert!(!is_valid_branch_name("..hidden"));
+    }
+
+    #[test]
+    fn test_invalid_branch_trailing_dot() {
+        assert!(!is_valid_branch_name("main."));
+        assert!(!is_valid_branch_name("feature."));
+    }
+
+    #[test]
+    fn test_invalid_branch_trailing_slash() {
+        assert!(!is_valid_branch_name("feature/"));
+        assert!(!is_valid_branch_name("dir/"));
+    }
+
+    #[test]
+    fn test_invalid_branch_leading_hyphen() {
+        assert!(!is_valid_branch_name("-feature"));
+        assert!(!is_valid_branch_name("-"));
+    }
+
+    #[test]
+    fn test_invalid_branch_control_chars() {
+        assert!(!is_valid_branch_name("main\x01"));
+        assert!(!is_valid_branch_name("feat\x7f"));
+        assert!(!is_valid_branch_name("\t"));
+    }
+
+    #[test]
+    fn test_invalid_branch_special_chars() {
+        assert!(!is_valid_branch_name("main dev")); // space
+        assert!(!is_valid_branch_name("feat~1")); // tilde
+        assert!(!is_valid_branch_name("feat^2")); // caret
+        assert!(!is_valid_branch_name("a:b")); // colon
+        assert!(!is_valid_branch_name("a\\b")); // backslash
+        assert!(!is_valid_branch_name("feat?")); // question mark
+        assert!(!is_valid_branch_name("feat*")); // asterisk
+        assert!(!is_valid_branch_name("feat[0]")); // bracket
+    }
 }

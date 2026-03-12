@@ -13,10 +13,7 @@ use crate::helpers::resolve_repo_authed;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route(
-        "/{owner}/{name}/forks",
-        post(create_fork).get(list_forks),
-    )
+    Router::new().route("/{owner}/{name}/forks", post(create_fork).get(list_forks))
 }
 
 #[derive(Deserialize)]
@@ -69,8 +66,7 @@ async fn create_fork(
     Json(req): Json<ForkRequest>,
 ) -> Result<(StatusCode, Json<ForkResponse>), (StatusCode, String)> {
     // Resolve source repo (respects visibility)
-    let (source_repo, _owner_user) =
-        resolve_repo_authed(&state, &owner, &name, &user).await?;
+    let (source_repo, _owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
 
     let fork_name = req.name.as_deref().unwrap_or(&name);
 
@@ -165,20 +161,16 @@ async fn list_forks(
 
     // Public repos: anyone can see forks. Private: require auth + access.
     if repo.visibility != Visibility::Public {
-        let u = user.as_ref().ok_or((
-            StatusCode::NOT_FOUND,
-            "repository not found".into(),
-        ))?;
+        let u = user
+            .as_ref()
+            .ok_or((StatusCode::NOT_FOUND, "repository not found".into()))?;
         let is_owner = u.id == owner_user.id;
         if !is_owner {
-            let is_collab = db::collaborator::get_role(
-                &state.db,
-                &repo.id.to_string(),
-                &u.id.to_string(),
-            )
-            .await
-            .unwrap_or(None)
-            .is_some();
+            let is_collab =
+                db::collaborator::get_role(&state.db, &repo.id.to_string(), &u.id.to_string())
+                    .await
+                    .unwrap_or(None)
+                    .is_some();
             if !is_collab {
                 return Err((StatusCode::NOT_FOUND, "repository not found".into()));
             }

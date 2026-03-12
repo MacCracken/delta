@@ -175,14 +175,10 @@ async fn get_repo(
         let is_owner = user.as_ref().is_some_and(|u| u.id == owner_user.id);
         if !is_owner {
             let is_collab = if let Some(u) = &user {
-                db::collaborator::get_role(
-                    &state.db,
-                    &repo.id.to_string(),
-                    &u.id.to_string(),
-                )
-                .await
-                .unwrap_or(None)
-                .is_some()
+                db::collaborator::get_role(&state.db, &repo.id.to_string(), &u.id.to_string())
+                    .await
+                    .unwrap_or(None)
+                    .is_some()
             } else {
                 false
             };
@@ -258,7 +254,10 @@ async fn delete_repo(
 
     // Only the owner can delete a repository
     if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "only the owner can delete a repository".into()));
+        return Err((
+            StatusCode::FORBIDDEN,
+            "only the owner can delete a repository".into(),
+        ));
     }
 
     let owner_id = owner_user.id.to_string();

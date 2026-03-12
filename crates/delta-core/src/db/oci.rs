@@ -80,16 +80,14 @@ pub async fn get_manifest_by_digest(
     repo_id: &str,
     digest: &str,
 ) -> Result<OciManifest> {
-    sqlx::query_as::<_, ManifestRow>(
-        "SELECT * FROM oci_manifests WHERE repo_id = ? AND digest = ?",
-    )
-    .bind(repo_id)
-    .bind(digest)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| DeltaError::Registry(e.to_string()))?
-    .map(|r| r.into_manifest())
-    .ok_or_else(|| DeltaError::Registry("manifest not found".into()))
+    sqlx::query_as::<_, ManifestRow>("SELECT * FROM oci_manifests WHERE repo_id = ? AND digest = ?")
+        .bind(repo_id)
+        .bind(digest)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| DeltaError::Registry(e.to_string()))?
+        .map(|r| r.into_manifest())
+        .ok_or_else(|| DeltaError::Registry("manifest not found".into()))
 }
 
 pub async fn get_manifest_by_tag(
@@ -126,12 +124,7 @@ pub async fn delete_manifest(pool: &SqlitePool, repo_id: &str, digest: &str) -> 
 
 // --- Tags ---
 
-pub async fn put_tag(
-    pool: &SqlitePool,
-    repo_id: &str,
-    tag: &str,
-    manifest_id: &str,
-) -> Result<()> {
+pub async fn put_tag(pool: &SqlitePool, repo_id: &str, tag: &str, manifest_id: &str) -> Result<()> {
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
 
@@ -156,13 +149,12 @@ pub async fn put_tag(
 }
 
 pub async fn list_tags(pool: &SqlitePool, repo_id: &str) -> Result<Vec<String>> {
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "SELECT tag FROM oci_tags WHERE repo_id = ? ORDER BY updated_at DESC",
-    )
-    .bind(repo_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| DeltaError::Registry(e.to_string()))?;
+    let rows: Vec<(String,)> =
+        sqlx::query_as("SELECT tag FROM oci_tags WHERE repo_id = ? ORDER BY updated_at DESC")
+            .bind(repo_id)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| DeltaError::Registry(e.to_string()))?;
     Ok(rows.into_iter().map(|r| r.0).collect())
 }
 
@@ -198,11 +190,7 @@ pub async fn upsert_repo_blob(
     Ok(())
 }
 
-pub async fn get_repo_blob(
-    pool: &SqlitePool,
-    repo_id: &str,
-    digest: &str,
-) -> Result<OciRepoBlob> {
+pub async fn get_repo_blob(pool: &SqlitePool, repo_id: &str, digest: &str) -> Result<OciRepoBlob> {
     sqlx::query_as::<_, RepoBlobRow>(
         "SELECT * FROM oci_repo_blobs WHERE repo_id = ? AND digest = ?",
     )
@@ -328,14 +316,12 @@ pub async fn update_blob_upload_offset(
 
 pub async fn complete_blob_upload(pool: &SqlitePool, upload_id: &str) -> Result<()> {
     let now = Utc::now().to_rfc3339();
-    sqlx::query(
-        "UPDATE oci_blob_uploads SET state = 'completed', updated_at = ? WHERE id = ?",
-    )
-    .bind(&now)
-    .bind(upload_id)
-    .execute(pool)
-    .await
-    .map_err(|e| DeltaError::Registry(e.to_string()))?;
+    sqlx::query("UPDATE oci_blob_uploads SET state = 'completed', updated_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(upload_id)
+        .execute(pool)
+        .await
+        .map_err(|e| DeltaError::Registry(e.to_string()))?;
     Ok(())
 }
 

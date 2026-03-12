@@ -45,19 +45,15 @@ async fn pipeline_badge(
         return Err((StatusCode::NOT_FOUND, "not found".into()));
     }
 
-    let latest = db::pipeline::get_latest(
-        &state.db,
-        &repo.id.to_string(),
-        query.branch.as_deref(),
-    )
-    .await
-    .map_err(|e| {
-        tracing::error!("failed to get latest pipeline: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal server error".into(),
-        )
-    })?;
+    let latest = db::pipeline::get_latest(&state.db, &repo.id.to_string(), query.branch.as_deref())
+        .await
+        .map_err(|e| {
+            tracing::error!("failed to get latest pipeline: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
 
     let (status_text, color) = match latest.as_ref().map(|r| r.status) {
         Some(RunStatus::Passed) => ("passing", "#4c1"),

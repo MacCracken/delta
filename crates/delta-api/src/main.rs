@@ -67,13 +67,9 @@ async fn main() -> anyhow::Result<()> {
         let ssh_host = config.server.host.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = delta_api::ssh::start_ssh_server(
-                &ssh_config,
-                ssh_pool,
-                ssh_repos_dir,
-                &ssh_host,
-            )
-            .await
+            if let Err(e) =
+                delta_api::ssh::start_ssh_server(&ssh_config, ssh_pool, ssh_repos_dir, &ssh_host)
+                    .await
             {
                 tracing::error!("SSH server error: {}", e);
             }

@@ -24,10 +24,7 @@ pub fn router() -> Router<AppState> {
             "/v2/{owner}/{name}/blobs/{digest}",
             head(check_blob).get(pull_blob).delete(delete_blob),
         )
-        .route(
-            "/v2/{owner}/{name}/blobs/uploads/",
-            post(initiate_upload),
-        )
+        .route("/v2/{owner}/{name}/blobs/uploads/", post(initiate_upload))
         .route(
             "/v2/{owner}/{name}/blobs/uploads/{uuid}",
             patch(upload_chunk).put(complete_upload),
@@ -39,10 +36,7 @@ pub fn router() -> Router<AppState> {
                 .put(push_manifest)
                 .delete(oci_delete_manifest),
         )
-        .route(
-            "/v2/{owner}/{name}/tags/list",
-            get(list_tags),
-        )
+        .route("/v2/{owner}/{name}/tags/list", get(list_tags))
 }
 
 // --- Version Check ---
@@ -65,7 +59,10 @@ async fn check_blob(
 
     let mut headers = HeaderMap::new();
     headers.insert("docker-content-digest", digest.parse().unwrap());
-    headers.insert(header::CONTENT_LENGTH, blob.size_bytes.to_string().parse().unwrap());
+    headers.insert(
+        header::CONTENT_LENGTH,
+        blob.size_bytes.to_string().parse().unwrap(),
+    );
     Ok((StatusCode::OK, headers))
 }
 
@@ -86,8 +83,14 @@ async fn pull_blob(
 
     let mut headers = HeaderMap::new();
     headers.insert("docker-content-digest", digest.parse().unwrap());
-    headers.insert(header::CONTENT_LENGTH, data.len().to_string().parse().unwrap());
-    headers.insert(header::CONTENT_TYPE, "application/octet-stream".parse().unwrap());
+    headers.insert(
+        header::CONTENT_LENGTH,
+        data.len().to_string().parse().unwrap(),
+    );
+    headers.insert(
+        header::CONTENT_TYPE,
+        "application/octet-stream".parse().unwrap(),
+    );
 
     Ok((StatusCode::OK, headers, data))
 }
@@ -108,7 +111,10 @@ async fn delete_blob(
         .await
         .map_err(|e| {
             tracing::error!("failed to delete blob: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".into())
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
         })?;
 
     let _ = state.blob_store.delete(&blob.content_hash);
@@ -145,13 +151,18 @@ async fn initiate_upload(
             .await
             .map_err(|e| {
                 tracing::error!("failed to store blob record: {}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".into())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal server error".into(),
+                )
             })?;
 
         let mut headers = HeaderMap::new();
         headers.insert(
             header::LOCATION,
-            format!("/v2/{}/{}/blobs/{}", owner, name, digest).parse().unwrap(),
+            format!("/v2/{}/{}/blobs/{}", owner, name, digest)
+                .parse()
+                .unwrap(),
         );
         headers.insert("docker-content-digest", digest.parse().unwrap());
         return Ok((StatusCode::CREATED, headers));
@@ -162,7 +173,10 @@ async fn initiate_upload(
         .await
         .map_err(|e| {
             tracing::error!("failed to create upload: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".into())
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
         })?;
 
     let mut headers = HeaderMap::new();
@@ -201,15 +215,21 @@ async fn upload_chunk(
     }
 
     let staging = OciStagingArea::new(&state.config.storage.artifacts_dir);
-    let new_offset = staging
-        .append_chunk(&uuid, &body)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("chunk write failed: {}", e)))?;
+    let new_offset = staging.append_chunk(&uuid, &body).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("chunk write failed: {}", e),
+        )
+    })?;
 
     db::oci::update_blob_upload_offset(&state.db, &uuid, new_offset as i64)
         .await
         .map_err(|e| {
             tracing::error!("failed to update upload offset: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".into())
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
         })?;
 
     let mut headers = HeaderMap::new();
@@ -222,7 +242,9 @@ async fn upload_chunk(
     headers.insert("docker-upload-uuid", uuid.parse().unwrap());
     headers.insert(
         header::RANGE,
-        format!("0-{}", new_offset.saturating_sub(1)).parse().unwrap(),
+        format!("0-{}", new_offset.saturating_sub(1))
+            .parse()
+            .unwrap(),
     );
 
     Ok((StatusCode::ACCEPTED, headers))
@@ -260,9 +282,12 @@ async fn complete_upload(
 
     // Append any final chunk data
     if !body.is_empty() {
-        staging
-            .append_chunk(&uuid, &body)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("chunk write failed: {}", e)))?;
+        staging.append_chunk(&uuid, &body).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("chunk write failed: {}", e),
+            )
+        })?;
     }
 
     // Finalize: verify digest and store
@@ -276,20 +301,28 @@ async fn complete_upload(
         .await
         .map_err(|e| {
             tracing::error!("failed to store blob record: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".into())
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
         })?;
 
     db::oci::complete_blob_upload(&state.db, &uuid)
         .await
         .map_err(|e| {
             tracing::error!("failed to complete upload: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".into())
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
         })?;
 
     let mut headers = HeaderMap::new();
     headers.insert(
         header::LOCATION,
-        format!("/v2/{}/{}/blobs/{}", owner, name, digest).parse().unwrap(),
+        format!("/v2/{}/{}/blobs/{}", owner, name, digest)
+            .parse()
+            .unwrap(),
     );
     headers.insert("docker-content-digest", digest.parse().unwrap());
 
@@ -309,7 +342,10 @@ async fn check_manifest(
     let mut headers = HeaderMap::new();
     headers.insert("docker-content-digest", manifest.digest.parse().unwrap());
     headers.insert(header::CONTENT_TYPE, manifest.media_type.parse().unwrap());
-    headers.insert(header::CONTENT_LENGTH, manifest.size_bytes.to_string().parse().unwrap());
+    headers.insert(
+        header::CONTENT_LENGTH,
+        manifest.size_bytes.to_string().parse().unwrap(),
+    );
 
     Ok((StatusCode::OK, headers))
 }
@@ -322,15 +358,20 @@ async fn pull_manifest(
     let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let manifest = resolve_manifest(&state, &repo.id.to_string(), &reference).await?;
 
-    let data = state
-        .blob_store
-        .read(&manifest.content_hash)
-        .map_err(|e| (StatusCode::NOT_FOUND, format!("manifest data not found: {}", e)))?;
+    let data = state.blob_store.read(&manifest.content_hash).map_err(|e| {
+        (
+            StatusCode::NOT_FOUND,
+            format!("manifest data not found: {}", e),
+        )
+    })?;
 
     let mut headers = HeaderMap::new();
     headers.insert("docker-content-digest", manifest.digest.parse().unwrap());
     headers.insert(header::CONTENT_TYPE, manifest.media_type.parse().unwrap());
-    headers.insert(header::CONTENT_LENGTH, data.len().to_string().parse().unwrap());
+    headers.insert(
+        header::CONTENT_LENGTH,
+        data.len().to_string().parse().unwrap(),
+    );
 
     Ok((StatusCode::OK, headers, data))
 }
@@ -374,7 +415,10 @@ async fn push_manifest(
     .await
     .map_err(|e| {
         tracing::error!("failed to store manifest: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".into())
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal server error".into(),
+        )
     })?;
 
     // If reference is a tag (not a digest), create/update the tag
@@ -383,14 +427,19 @@ async fn push_manifest(
             .await
             .map_err(|e| {
                 tracing::error!("failed to create tag: {}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".into())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal server error".into(),
+                )
             })?;
     }
 
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(
         header::LOCATION,
-        format!("/v2/{}/{}/manifests/{}", owner, name, digest).parse().unwrap(),
+        format!("/v2/{}/{}/manifests/{}", owner, name, digest)
+            .parse()
+            .unwrap(),
     );
     resp_headers.insert("docker-content-digest", digest.parse().unwrap());
 
@@ -411,7 +460,10 @@ async fn oci_delete_manifest(
         .await
         .map_err(|e| {
             tracing::error!("failed to delete manifest: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".into())
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
         })?;
 
     let _ = state.blob_store.delete(&manifest.content_hash);
@@ -430,7 +482,10 @@ async fn list_tags(
         .await
         .map_err(|e| {
             tracing::error!("failed to list tags: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".into())
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
         })?;
 
     Ok(Json(TagListResponse {
@@ -459,6 +514,11 @@ async fn resolve_manifest(
     } else {
         db::oci::get_manifest_by_tag(&state.db, repo_id, reference)
             .await
-            .map_err(|_| (StatusCode::NOT_FOUND, format!("tag '{}' not found", reference)))
+            .map_err(|_| {
+                (
+                    StatusCode::NOT_FOUND,
+                    format!("tag '{}' not found", reference),
+                )
+            })
     }
 }

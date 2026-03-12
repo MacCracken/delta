@@ -53,14 +53,11 @@ pub async fn resolve_repo_authed(
 
     if repo.visibility != Visibility::Public && user.id != owner_user.id {
         // Check if user is a collaborator (any role grants visibility)
-        let is_collab = db::collaborator::get_role(
-            &state.db,
-            &repo.id.to_string(),
-            &user.id.to_string(),
-        )
-        .await
-        .unwrap_or(None)
-        .is_some();
+        let is_collab =
+            db::collaborator::get_role(&state.db, &repo.id.to_string(), &user.id.to_string())
+                .await
+                .unwrap_or(None)
+                .is_some();
 
         if !is_collab {
             return Err((StatusCode::NOT_FOUND, "repository not found".into()));
@@ -84,19 +81,12 @@ pub async fn require_role(
         return Ok(());
     }
 
-    let role = db::collaborator::get_role(
-        &state.db,
-        &repo.id.to_string(),
-        &user.id.to_string(),
-    )
-    .await
-    .unwrap_or(None);
+    let role = db::collaborator::get_role(&state.db, &repo.id.to_string(), &user.id.to_string())
+        .await
+        .unwrap_or(None);
 
     match role {
         Some(r) if r.has(required) => Ok(()),
-        _ => Err((
-            StatusCode::FORBIDDEN,
-            "insufficient permissions".into(),
-        )),
+        _ => Err((StatusCode::FORBIDDEN, "insufficient permissions".into())),
     }
 }

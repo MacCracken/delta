@@ -512,10 +512,7 @@ mod tests {
     fn test_cartesian_product_two_dimensions() {
         let mut m = HashMap::new();
         m.insert("os".into(), vec!["linux".into(), "macos".into()]);
-        m.insert(
-            "toolchain".into(),
-            vec!["stable".into(), "nightly".into()],
-        );
+        m.insert("toolchain".into(), vec!["stable".into(), "nightly".into()]);
         let combos = cartesian_product(&m).unwrap();
         assert_eq!(combos.len(), 4);
         // Each combo has both keys
@@ -571,8 +568,16 @@ mod tests {
 
         // Check display names contain matrix values
         let names: Vec<&str> = expanded.iter().map(|e| e.display_name.as_str()).collect();
-        assert!(names.iter().any(|n: &&str| n.contains("linux") && n.contains("stable")));
-        assert!(names.iter().any(|n: &&str| n.contains("macos") && n.contains("nightly")));
+        assert!(
+            names
+                .iter()
+                .any(|n: &&str| n.contains("linux") && n.contains("stable"))
+        );
+        assert!(
+            names
+                .iter()
+                .any(|n: &&str| n.contains("macos") && n.contains("nightly"))
+        );
 
         // All instances should have fail_fast = true
         assert!(expanded.iter().all(|e| e.fail_fast));

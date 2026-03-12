@@ -58,7 +58,10 @@ pub struct SetPolicyParams<'a> {
     pub max_total_bytes: Option<i64>,
 }
 
-pub async fn set_policy(pool: &SqlitePool, params: &SetPolicyParams<'_>) -> Result<RetentionPolicy> {
+pub async fn set_policy(
+    pool: &SqlitePool,
+    params: &SetPolicyParams<'_>,
+) -> Result<RetentionPolicy> {
     let now = Utc::now().to_rfc3339();
 
     // Upsert: insert or update on conflict
@@ -125,13 +128,12 @@ pub async fn find_excess_artifacts(
 
 /// Get total artifact size for a repo.
 pub async fn total_artifact_size(pool: &SqlitePool, repo_id: &str) -> Result<i64> {
-    let row: (i64,) = sqlx::query_as(
-        "SELECT COALESCE(SUM(size_bytes), 0) FROM artifacts WHERE repo_id = ?",
-    )
-    .bind(repo_id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| DeltaError::Registry(e.to_string()))?;
+    let row: (i64,) =
+        sqlx::query_as("SELECT COALESCE(SUM(size_bytes), 0) FROM artifacts WHERE repo_id = ?")
+            .bind(repo_id)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| DeltaError::Registry(e.to_string()))?;
     Ok(row.0)
 }
 

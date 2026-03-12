@@ -173,11 +173,7 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn get_latest(
-    pool: &SqlitePool,
-    name: &str,
-    arch: Option<&str>,
-) -> Result<ArkPackage> {
+pub async fn get_latest(pool: &SqlitePool, name: &str, arch: Option<&str>) -> Result<ArkPackage> {
     let row = if let Some(arch) = arch {
         sqlx::query_as::<_, ArkPackageRow>(
             "SELECT * FROM ark_packages WHERE package_name = ? AND arch = ? ORDER BY created_at DESC LIMIT 1",

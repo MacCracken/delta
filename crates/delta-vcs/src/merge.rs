@@ -159,3 +159,57 @@ async fn run_git_output(worktree: &Path, args: &[&str]) -> Result<String> {
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_author_valid() {
+        assert!(validate_author("Alice", "alice@example.com").is_ok());
+        assert!(validate_author("Bob Smith", "bob@test.org").is_ok());
+        assert!(validate_author("CI Bot", "ci@delta.local").is_ok());
+    }
+
+    #[test]
+    fn test_validate_author_empty_name() {
+        let err = validate_author("", "alice@example.com").unwrap_err();
+        assert!(matches!(err, DeltaError::InvalidRef(_)));
+    }
+
+    #[test]
+    fn test_validate_author_empty_email() {
+        let err = validate_author("Alice", "").unwrap_err();
+        assert!(matches!(err, DeltaError::InvalidRef(_)));
+    }
+
+    #[test]
+    fn test_validate_author_leading_hyphen_name() {
+        let err = validate_author("-Alice", "alice@example.com").unwrap_err();
+        assert!(matches!(err, DeltaError::InvalidRef(_)));
+    }
+
+    #[test]
+    fn test_validate_author_leading_hyphen_email() {
+        let err = validate_author("Alice", "-alice@example.com").unwrap_err();
+        assert!(matches!(err, DeltaError::InvalidRef(_)));
+    }
+
+    #[test]
+    fn test_validate_author_null_byte() {
+        assert!(validate_author("Ali\0ce", "alice@example.com").is_err());
+        assert!(validate_author("Alice", "alice\0@example.com").is_err());
+    }
+
+    #[test]
+    fn test_validate_author_newline() {
+        assert!(validate_author("Alice\n", "alice@example.com").is_err());
+        assert!(validate_author("Alice", "alice@example.com\n").is_err());
+    }
+
+    #[test]
+    fn test_validate_author_carriage_return() {
+        assert!(validate_author("Alice\r", "alice@example.com").is_err());
+        assert!(validate_author("Alice", "alice@example.com\r").is_err());
+    }
+}

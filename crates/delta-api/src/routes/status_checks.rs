@@ -101,17 +101,26 @@ async fn create_status(
 
     // Validate input lengths
     if req.context.is_empty() || req.context.len() > 255 {
-        return Err((StatusCode::BAD_REQUEST, "context must be 1-255 characters".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "context must be 1-255 characters".into(),
+        ));
     }
     if let Some(ref desc) = req.description
         && desc.len() > 1024
     {
-        return Err((StatusCode::BAD_REQUEST, "description too long (max 1024 chars)".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "description too long (max 1024 chars)".into(),
+        ));
     }
     if let Some(ref url) = req.target_url
         && url.len() > 2048
     {
-        return Err((StatusCode::BAD_REQUEST, "target_url too long (max 2048 chars)".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "target_url too long (max 2048 chars)".into(),
+        ));
     }
 
     let check_state = match req.state.as_str() {

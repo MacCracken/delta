@@ -89,16 +89,26 @@ async fn add_collaborator(
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Admin).await?;
 
-    let role = CollaboratorRole::parse(&req.role)
-        .ok_or((StatusCode::BAD_REQUEST, "invalid role: use read, write, or admin".into()))?;
+    let role = CollaboratorRole::parse(&req.role).ok_or((
+        StatusCode::BAD_REQUEST,
+        "invalid role: use read, write, or admin".into(),
+    ))?;
 
     let target_user = db::user::get_by_username(&state.db, &req.username)
         .await
-        .map_err(|_| (StatusCode::NOT_FOUND, format!("user '{}' not found", req.username)))?;
+        .map_err(|_| {
+            (
+                StatusCode::NOT_FOUND,
+                format!("user '{}' not found", req.username),
+            )
+        })?;
 
     // Cannot add the owner as a collaborator
     if target_user.id == owner_user.id {
-        return Err((StatusCode::BAD_REQUEST, "owner cannot be added as collaborator".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "owner cannot be added as collaborator".into(),
+        ));
     }
 
     let collab = db::collaborator::set(
@@ -122,7 +132,10 @@ async fn add_collaborator(
         "add_collaborator",
         "repository",
         Some(&repo.id.to_string()),
-        Some(&format!("{}/{} -> {} ({})", owner, name, req.username, req.role)),
+        Some(&format!(
+            "{}/{} -> {} ({})",
+            owner, name, req.username, req.role
+        )),
         None,
     )
     .await;
@@ -148,15 +161,17 @@ async fn get_collaborator(
 
     let target_user = db::user::get_by_username(&state.db, &username)
         .await
-        .map_err(|_| (StatusCode::NOT_FOUND, format!("user '{}' not found", username)))?;
+        .map_err(|_| {
+            (
+                StatusCode::NOT_FOUND,
+                format!("user '{}' not found", username),
+            )
+        })?;
 
-    let collab = db::collaborator::get(
-        &state.db,
-        &repo.id.to_string(),
-        &target_user.id.to_string(),
-    )
-    .await
-    .map_err(|_| (StatusCode::NOT_FOUND, "collaborator not found".into()))?;
+    let collab =
+        db::collaborator::get(&state.db, &repo.id.to_string(), &target_user.id.to_string())
+            .await
+            .map_err(|_| (StatusCode::NOT_FOUND, "collaborator not found".into()))?;
 
     Ok(Json(CollaboratorResponse {
         username: target_user.username,
@@ -180,12 +195,19 @@ async fn update_collaborator(
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Admin).await?;
 
-    let role = CollaboratorRole::parse(&req.role)
-        .ok_or((StatusCode::BAD_REQUEST, "invalid role: use read, write, or admin".into()))?;
+    let role = CollaboratorRole::parse(&req.role).ok_or((
+        StatusCode::BAD_REQUEST,
+        "invalid role: use read, write, or admin".into(),
+    ))?;
 
     let target_user = db::user::get_by_username(&state.db, &username)
         .await
-        .map_err(|_| (StatusCode::NOT_FOUND, format!("user '{}' not found", username)))?;
+        .map_err(|_| {
+            (
+                StatusCode::NOT_FOUND,
+                format!("user '{}' not found", username),
+            )
+        })?;
 
     // Cannot change the owner's role
     if target_user.id == owner_user.id {
@@ -213,7 +235,10 @@ async fn update_collaborator(
         "update_collaborator",
         "repository",
         Some(&repo.id.to_string()),
-        Some(&format!("{}/{} -> {} ({})", owner, name, username, req.role)),
+        Some(&format!(
+            "{}/{} -> {} ({})",
+            owner, name, username, req.role
+        )),
         None,
     )
     .await;
@@ -236,15 +261,16 @@ async fn remove_collaborator(
 
     let target_user = db::user::get_by_username(&state.db, &username)
         .await
-        .map_err(|_| (StatusCode::NOT_FOUND, format!("user '{}' not found", username)))?;
+        .map_err(|_| {
+            (
+                StatusCode::NOT_FOUND,
+                format!("user '{}' not found", username),
+            )
+        })?;
 
-    db::collaborator::remove(
-        &state.db,
-        &repo.id.to_string(),
-        &target_user.id.to_string(),
-    )
-    .await
-    .map_err(|_| (StatusCode::NOT_FOUND, "collaborator not found".into()))?;
+    db::collaborator::remove(&state.db, &repo.id.to_string(), &target_user.id.to_string())
+        .await
+        .map_err(|_| (StatusCode::NOT_FOUND, "collaborator not found".into()))?;
 
     let _ = db::audit::log(
         &state.db,

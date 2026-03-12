@@ -153,8 +153,13 @@ async fn run_pipelines(
             }
 
             // Execute the job
-            let result =
-                execute_job(&expanded.display_name, &expanded.job, ctx.repo_path, &job_env).await;
+            let result = execute_job(
+                &expanded.display_name,
+                &expanded.job,
+                ctx.repo_path,
+                &job_env,
+            )
+            .await;
 
             // Store step logs (mask secret values)
             for (idx, step) in result.steps.iter().enumerate() {
@@ -184,7 +189,12 @@ async fn run_pipelines(
                         let url_encoded: String = secret_value
                             .bytes()
                             .map(|b| {
-                                if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
+                                if b.is_ascii_alphanumeric()
+                                    || b == b'-'
+                                    || b == b'_'
+                                    || b == b'.'
+                                    || b == b'~'
+                                {
                                     (b as char).to_string()
                                 } else {
                                     format!("%{:02X}", b)

@@ -37,8 +37,7 @@ async fn add_key(
     }
 
     // Validate hex and key length (32 bytes = 64 hex chars)
-    if req.public_key_hex.len() != 64
-        || !req.public_key_hex.chars().all(|c| c.is_ascii_hexdigit())
+    if req.public_key_hex.len() != 64 || !req.public_key_hex.chars().all(|c| c.is_ascii_hexdigit())
     {
         return Err((
             StatusCode::BAD_REQUEST,

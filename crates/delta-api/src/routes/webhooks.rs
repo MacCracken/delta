@@ -89,7 +89,10 @@ async fn create_webhook(
 
     // Validate input lengths
     if req.url.len() > 2048 {
-        return Err((StatusCode::BAD_REQUEST, "webhook URL too long (max 2048 chars)".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "webhook URL too long (max 2048 chars)".into(),
+        ));
     }
     if req.events.len() > 20 {
         return Err((StatusCode::BAD_REQUEST, "too many events (max 20)".into()));
@@ -97,7 +100,10 @@ async fn create_webhook(
     if let Some(ref secret) = req.secret
         && secret.len() > 256
     {
-        return Err((StatusCode::BAD_REQUEST, "secret too long (max 256 chars)".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "secret too long (max 256 chars)".into(),
+        ));
     }
 
     // Validate webhook URL scheme

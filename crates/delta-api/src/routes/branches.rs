@@ -162,11 +162,17 @@ async fn create_protection(
 
     // Validate pattern
     if req.pattern.is_empty() || req.pattern.len() > 256 {
-        return Err((StatusCode::BAD_REQUEST, "pattern must be 1-256 characters".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "pattern must be 1-256 characters".into(),
+        ));
     }
     // Reject patterns with characters that could cause issues
     if req.pattern.contains('\0') {
-        return Err((StatusCode::BAD_REQUEST, "pattern contains invalid characters".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "pattern contains invalid characters".into(),
+        ));
     }
 
     let protection = delta_core::db::branch_protection::create(

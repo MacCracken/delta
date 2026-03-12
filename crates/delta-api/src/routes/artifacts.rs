@@ -47,10 +47,7 @@ pub fn router() -> Router<AppState> {
             "/{owner}/{name}/artifacts/retention",
             get(get_retention).put(set_retention),
         )
-        .route(
-            "/{owner}/{name}/artifacts/cleanup",
-            put(run_cleanup),
-        )
+        .route("/{owner}/{name}/artifacts/cleanup", put(run_cleanup))
         .route(
             "/{owner}/{name}/releases",
             get(list_releases).post(create_release),
@@ -301,7 +298,10 @@ async fn add_signature(
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
     if key.user_id != user.id.to_string() {
-        return Err((StatusCode::FORBIDDEN, "signing key does not belong to you".into()));
+        return Err((
+            StatusCode::FORBIDDEN,
+            "signing key does not belong to you".into(),
+        ));
     }
 
     // Verify the signature is valid before storing
@@ -313,7 +313,10 @@ async fn add_signature(
     .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
     if !valid {
-        return Err((StatusCode::BAD_REQUEST, "signature verification failed".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "signature verification failed".into(),
+        ));
     }
 
     let sig = db::signing::add_signature(&state.db, &artifact_id, &req.key_id, &req.signature)
@@ -440,7 +443,10 @@ async fn set_retention(
     if let Some(days) = req.max_age_days
         && (days <= 0 || days > 36500)
     {
-        return Err((StatusCode::BAD_REQUEST, "max_age_days must be 1-36500".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "max_age_days must be 1-36500".into(),
+        ));
     }
     if let Some(count) = req.max_count
         && (count <= 0 || count > 100_000)
@@ -450,7 +456,10 @@ async fn set_retention(
     if let Some(bytes) = req.max_total_bytes
         && bytes <= 0
     {
-        return Err((StatusCode::BAD_REQUEST, "max_total_bytes must be positive".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "max_total_bytes must be positive".into(),
+        ));
     }
 
     let policy = db::retention::set_policy(
@@ -498,9 +507,21 @@ async fn run_cleanup(
     let (max_age, max_count, max_bytes) = match policy {
         Some(p) => (p.max_age_days, p.max_count, p.max_total_bytes),
         None => (
-            state.config.registry.max_artifact_age_days.map(|d| d as i64),
-            state.config.registry.max_artifacts_per_repo.map(|c| c as i64),
-            state.config.registry.max_total_bytes_per_repo.map(|b| b as i64),
+            state
+                .config
+                .registry
+                .max_artifact_age_days
+                .map(|d| d as i64),
+            state
+                .config
+                .registry
+                .max_artifacts_per_repo
+                .map(|c| c as i64),
+            state
+                .config
+                .registry
+                .max_total_bytes_per_repo
+                .map(|b| b as i64),
         ),
     };
 

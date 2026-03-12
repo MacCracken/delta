@@ -66,8 +66,7 @@ async fn add_key(
         return Err((StatusCode::BAD_REQUEST, "invalid key name".into()));
     }
 
-    let fingerprint =
-        compute_fingerprint(&public_key).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let fingerprint = compute_fingerprint(&public_key).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
     let key = db::ssh_key::add(
         &state.db,
@@ -90,7 +89,9 @@ async fn list_keys(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(keys.into_iter().map(SshKeyResponse::from_key).collect()))
+    Ok(Json(
+        keys.into_iter().map(SshKeyResponse::from_key).collect(),
+    ))
 }
 
 async fn get_key(

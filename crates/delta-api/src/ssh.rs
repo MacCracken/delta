@@ -79,11 +79,7 @@ impl Handler for SshSession {
         }
     }
 
-    async fn auth_password(
-        &mut self,
-        _user: &str,
-        _password: &str,
-    ) -> Result<Auth, Self::Error> {
+    async fn auth_password(&mut self, _user: &str, _password: &str) -> Result<Auth, Self::Error> {
         Ok(Auth::reject())
     }
 
@@ -142,10 +138,7 @@ impl Handler for SshSession {
             }
         };
 
-        if let Err(msg) = self
-            .authorize(&service, &owner, &repo_name, &user_id)
-            .await
-        {
+        if let Err(msg) = self.authorize(&service, &owner, &repo_name, &user_id).await {
             let err = format!("ERROR: {}\n", msg);
             session.data(channel_id, CryptoVec::from(err.as_bytes()))?;
             session.close(channel_id)?;
@@ -284,13 +277,10 @@ impl SshSession {
                 if repo.visibility == Visibility::Public || is_owner {
                     Ok(())
                 } else {
-                    let role = db::collaborator::get_role(
-                        &self.state.pool,
-                        &repo.id.to_string(),
-                        user_id,
-                    )
-                    .await
-                    .unwrap_or(None);
+                    let role =
+                        db::collaborator::get_role(&self.state.pool, &repo.id.to_string(), user_id)
+                            .await
+                            .unwrap_or(None);
                     if role.is_some() {
                         Ok(())
                     } else {
@@ -302,13 +292,10 @@ impl SshSession {
                 if is_owner {
                     Ok(())
                 } else {
-                    let role = db::collaborator::get_role(
-                        &self.state.pool,
-                        &repo.id.to_string(),
-                        user_id,
-                    )
-                    .await
-                    .unwrap_or(None);
+                    let role =
+                        db::collaborator::get_role(&self.state.pool, &repo.id.to_string(), user_id)
+                            .await
+                            .unwrap_or(None);
                     match role {
                         Some(r) if r.has(CollaboratorRole::Write) => Ok(()),
                         _ => Err("permission denied: no push access".into()),
@@ -379,9 +366,7 @@ pub async fn start_ssh_server(
     let addr = format!("{}:{}", host, config.port);
     tracing::info!("SSH server listening on {}", addr);
 
-    server
-        .run_on_address(Arc::new(russh_config), &addr)
-        .await?;
+    server.run_on_address(Arc::new(russh_config), &addr).await?;
 
     Ok(())
 }
@@ -441,16 +426,14 @@ mod tests {
 
     #[test]
     fn test_parse_git_command_upload_pack() {
-        let (service, path) =
-            parse_git_command("git-upload-pack '/alice/myrepo.git'").unwrap();
+        let (service, path) = parse_git_command("git-upload-pack '/alice/myrepo.git'").unwrap();
         assert_eq!(service, "upload-pack");
         assert_eq!(path, "/alice/myrepo.git");
     }
 
     #[test]
     fn test_parse_git_command_receive_pack() {
-        let (service, path) =
-            parse_git_command("git-receive-pack '/alice/myrepo.git'").unwrap();
+        let (service, path) = parse_git_command("git-receive-pack '/alice/myrepo.git'").unwrap();
         assert_eq!(service, "receive-pack");
         assert_eq!(path, "/alice/myrepo.git");
     }
