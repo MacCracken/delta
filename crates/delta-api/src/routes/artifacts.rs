@@ -436,6 +436,23 @@ async fn set_retention(
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Admin).await?;
 
+    // Validate retention values
+    if let Some(days) = req.max_age_days
+        && (days <= 0 || days > 36500)
+    {
+        return Err((StatusCode::BAD_REQUEST, "max_age_days must be 1-36500".into()));
+    }
+    if let Some(count) = req.max_count
+        && (count <= 0 || count > 100_000)
+    {
+        return Err((StatusCode::BAD_REQUEST, "max_count must be 1-100000".into()));
+    }
+    if let Some(bytes) = req.max_total_bytes
+        && bytes <= 0
+    {
+        return Err((StatusCode::BAD_REQUEST, "max_total_bytes must be positive".into()));
+    }
+
     let policy = db::retention::set_policy(
         &state.db,
         &db::retention::SetPolicyParams {

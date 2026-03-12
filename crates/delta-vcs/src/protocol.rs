@@ -30,9 +30,10 @@ pub async fn advertise_refs(repo_path: &Path, service: &str) -> Result<Vec<u8>> 
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        tracing::error!("git {} --advertise-refs failed: {}", service, stderr);
         return Err(DeltaError::Storage(format!(
-            "git {} --advertise-refs failed: {}",
-            service, stderr
+            "git {} --advertise-refs failed",
+            service
         )));
     }
 

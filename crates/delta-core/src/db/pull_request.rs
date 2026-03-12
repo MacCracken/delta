@@ -154,7 +154,7 @@ pub async fn update_title_body(
 
 pub async fn close(pool: &SqlitePool, id: &str) -> Result<PullRequest> {
     let now = Utc::now().to_rfc3339();
-    sqlx::query(
+    let result = sqlx::query(
         "UPDATE pull_requests SET state = 'closed', closed_at = ?, updated_at = ? WHERE id = ? AND state = 'open'",
     )
     .bind(&now)
@@ -163,12 +163,15 @@ pub async fn close(pool: &SqlitePool, id: &str) -> Result<PullRequest> {
     .execute(pool)
     .await
     .map_err(|e| DeltaError::Storage(e.to_string()))?;
+    if result.rows_affected() == 0 {
+        return Err(DeltaError::Conflict("pull request is not open".into()));
+    }
     get_by_id(pool, id).await
 }
 
 pub async fn reopen(pool: &SqlitePool, id: &str) -> Result<PullRequest> {
     let now = Utc::now().to_rfc3339();
-    sqlx::query(
+    let result = sqlx::query(
         "UPDATE pull_requests SET state = 'open', closed_at = NULL, updated_at = ? WHERE id = ? AND state = 'closed'",
     )
     .bind(&now)
@@ -176,6 +179,9 @@ pub async fn reopen(pool: &SqlitePool, id: &str) -> Result<PullRequest> {
     .execute(pool)
     .await
     .map_err(|e| DeltaError::Storage(e.to_string()))?;
+    if result.rows_affected() == 0 {
+        return Err(DeltaError::Conflict("pull request is not closed".into()));
+    }
     get_by_id(pool, id).await
 }
 
@@ -186,7 +192,7 @@ pub async fn mark_merged(
     strategy: &str,
 ) -> Result<PullRequest> {
     let now = Utc::now().to_rfc3339();
-    sqlx::query(
+    let result = sqlx::query(
         "UPDATE pull_requests SET state = 'merged', merged_by = ?, merge_strategy = ?, merged_at = ?, updated_at = ? WHERE id = ? AND state = 'open'",
     )
     .bind(merged_by)
@@ -197,6 +203,9 @@ pub async fn mark_merged(
     .execute(pool)
     .await
     .map_err(|e| DeltaError::Storage(e.to_string()))?;
+    if result.rows_affected() == 0 {
+        return Err(DeltaError::Conflict("pull request is not open".into()));
+    }
     get_by_id(pool, id).await
 }
 
@@ -330,12 +339,15 @@ pub async fn list_reviews(pool: &SqlitePool, pr_id: &str) -> Result<Vec<PrReview
 /// Count approvals for a PR (only the latest review per reviewer counts).
 pub async fn count_approvals(pool: &SqlitePool, pr_id: &str) -> Result<u32> {
     let row: (i64,) = sqlx::query_as(
-        "SELECT COUNT(DISTINCT reviewer_id) FROM pr_reviews
-         WHERE pr_id = ? AND state = 'approved'
-         AND id IN (
-             SELECT id FROM pr_reviews r2
-             WHERE r2.pr_id = pr_reviews.pr_id AND r2.reviewer_id = pr_reviews.reviewer_id
-             ORDER BY created_at DESC LIMIT 1
+        "SELECT COUNT(*) FROM (
+             SELECT reviewer_id
+             FROM pr_reviews r1
+             WHERE r1.pr_id = ?
+               AND r1.state = 'approved'
+               AND r1.created_at = (
+                   SELECT MAX(r2.created_at) FROM pr_reviews r2
+                   WHERE r2.pr_id = r1.pr_id AND r2.reviewer_id = r1.reviewer_id
+               )
          )",
     )
     .bind(pr_id)

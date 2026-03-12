@@ -152,6 +152,57 @@ pub async fn update(
     get_by_id(pool, id).await
 }
 
+/// Create a forked repository record.
+pub async fn create_fork(
+    pool: &SqlitePool,
+    owner_id: &str,
+    name: &str,
+    description: Option<&str>,
+    visibility: Visibility,
+    forked_from: &str,
+) -> Result<Repository> {
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
+    let vis = visibility.as_str().to_string();
+
+    sqlx::query(
+        "INSERT INTO repositories (id, owner_id, name, description, visibility, default_branch, forked_from, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'main', ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(owner_id)
+    .bind(name)
+    .bind(description)
+    .bind(&vis)
+    .bind(forked_from)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        if e.to_string().contains("UNIQUE") {
+            DeltaError::Conflict(format!("repository '{}' already exists", name))
+        } else {
+            DeltaError::Storage(e.to_string())
+        }
+    })?;
+
+    get_by_id(pool, &id).await
+}
+
+/// List all forks of a repository.
+pub async fn list_forks(pool: &SqlitePool, parent_repo_id: &str) -> Result<Vec<Repository>> {
+    let rows = sqlx::query_as::<_, RepoRow>(
+        "SELECT * FROM repositories WHERE forked_from = ? ORDER BY created_at DESC",
+    )
+    .bind(parent_repo_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| DeltaError::Storage(e.to_string()))?;
+
+    Ok(rows.into_iter().map(|r| r.into_repo()).collect())
+}
+
 /// Delete a repository.
 pub async fn delete(pool: &SqlitePool, id: &str) -> Result<()> {
     let result = sqlx::query("DELETE FROM repositories WHERE id = ?")
@@ -174,6 +225,7 @@ struct RepoRow {
     description: Option<String>,
     visibility: String,
     default_branch: String,
+    forked_from: Option<String>,
     created_at: String,
     updated_at: String,
 }
@@ -191,6 +243,7 @@ impl RepoRow {
                 _ => Visibility::Private,
             },
             default_branch: self.default_branch,
+            forked_from: self.forked_from.and_then(|s| s.parse().ok()),
             created_at: self.created_at.parse().unwrap_or_default(),
             updated_at: self.updated_at.parse().unwrap_or_default(),
         }

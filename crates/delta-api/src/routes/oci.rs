@@ -191,6 +191,11 @@ async fn upload_chunk(
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "upload not found".into()))?;
 
+    // Verify upload belongs to this repository
+    if upload.repo_id != repo.id.to_string() {
+        return Err((StatusCode::NOT_FOUND, "upload not found".into()));
+    }
+
     if upload.state != "uploading" {
         return Err((StatusCode::BAD_REQUEST, "upload already completed".into()));
     }
@@ -241,6 +246,11 @@ async fn complete_upload(
     let upload = db::oci::get_blob_upload(&state.db, &uuid)
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "upload not found".into()))?;
+
+    // Verify upload belongs to this repository
+    if upload.repo_id != repo.id.to_string() {
+        return Err((StatusCode::NOT_FOUND, "upload not found".into()));
+    }
 
     if upload.state != "uploading" {
         return Err((StatusCode::BAD_REQUEST, "upload already completed".into()));

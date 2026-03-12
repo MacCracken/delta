@@ -55,6 +55,9 @@ async fn list_audit_log(
         query.offset.max(0),
     )
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("failed to list audit log: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".into())
+    })?;
     Ok(Json(entries))
 }

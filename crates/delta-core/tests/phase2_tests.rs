@@ -11,6 +11,13 @@ async fn setup_pool() -> sqlx::SqlitePool {
     for migration in [
         include_str!("../migrations/001_initial.sql"),
         include_str!("../migrations/002_git_protocol.sql"),
+        include_str!("../migrations/003_pull_requests.sql"),
+        include_str!("../migrations/004_cicd.sql"),
+        include_str!("../migrations/005_registry.sql"),
+        include_str!("../migrations/006_collaborators.sql"),
+        include_str!("../migrations/007_forks_and_templates.sql"),
+        include_str!("../migrations/008_lfs.sql"),
+        include_str!("../migrations/009_cascade_fixes.sql"),
     ] {
         sqlx::query(migration)
             .execute(&pool)

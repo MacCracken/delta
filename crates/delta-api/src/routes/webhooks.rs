@@ -87,11 +87,31 @@ async fn create_webhook(
 ) -> Result<(StatusCode, Json<WebhookResponse>), (StatusCode, String)> {
     let (repo, _) = resolve_admin_repo(&state, &owner, &name, &user).await?;
 
-    // Validate webhook URL: must be HTTP(S) and not target private networks
+    // Validate input lengths
+    if req.url.len() > 2048 {
+        return Err((StatusCode::BAD_REQUEST, "webhook URL too long (max 2048 chars)".into()));
+    }
+    if req.events.len() > 20 {
+        return Err((StatusCode::BAD_REQUEST, "too many events (max 20)".into()));
+    }
+    if let Some(ref secret) = req.secret
+        && secret.len() > 256
+    {
+        return Err((StatusCode::BAD_REQUEST, "secret too long (max 256 chars)".into()));
+    }
+
+    // Validate webhook URL scheme
     if !req.url.starts_with("https://") && !req.url.starts_with("http://") {
         return Err((
             StatusCode::BAD_REQUEST,
             "webhook URL must use http or https".into(),
+        ));
+    }
+    // Enforce HTTPS-only when configured
+    if state.config.webhooks.https_only && !req.url.starts_with("https://") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "webhook URL must use HTTPS (webhooks.https_only is enabled)".into(),
         ));
     }
     if crate::routes::git::is_private_url(&req.url) {
@@ -141,7 +161,7 @@ async fn delete_webhook(
 
     delta_core::db::webhook::delete(&state.db, &webhook_id, &repo.id.to_string())
         .await
-        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+        .map_err(|_| (StatusCode::NOT_FOUND, "webhook not found".into()))?;
 
     Ok(StatusCode::NO_CONTENT)
 }

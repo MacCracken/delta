@@ -48,13 +48,38 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let pool = db::init_pool(&config.storage.db_url).await?;
+
+    // Clone pool for SSH before moving into AppState
+    let ssh_pool = pool.clone();
+
     let state = AppState::new(config.clone(), pool);
     let app = routes::router(state);
 
     let addr = format!("{}:{}", config.server.host, config.server.port);
-    tracing::info!("delta listening on {}", addr);
+    tracing::info!("delta HTTP listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
+
+    // Start SSH server if enabled
+    if config.ssh.enabled {
+        let ssh_config = config.ssh.clone();
+        let ssh_repos_dir = config.storage.repos_dir.clone();
+        let ssh_host = config.server.host.clone();
+
+        tokio::spawn(async move {
+            if let Err(e) = delta_api::ssh::start_ssh_server(
+                &ssh_config,
+                ssh_pool,
+                ssh_repos_dir,
+                &ssh_host,
+            )
+            .await
+            {
+                tracing::error!("SSH server error: {}", e);
+            }
+        });
+    }
+
     axum::serve(listener, app).await?;
 
     Ok(())

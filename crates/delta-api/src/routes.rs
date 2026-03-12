@@ -2,15 +2,19 @@ pub mod ark;
 pub mod artifacts;
 pub mod audit;
 pub mod auth;
+pub mod badges;
 pub mod branches;
 pub mod collaborators;
+pub mod forks;
 pub mod git;
 pub mod health;
+pub mod lfs;
 pub mod oci;
 pub mod pipelines;
 pub mod pulls;
 pub mod repos;
 pub mod signing;
+pub mod ssh_keys;
 pub mod status_checks;
 pub mod webhooks;
 
@@ -56,11 +60,16 @@ pub fn router(state: AppState) -> Router {
         .nest("/api/v1/repos", status_checks::router())
         .nest("/api/v1/repos", pipelines::router())
         .nest("/api/v1/repos", artifacts::router())
+        .nest("/api/v1/repos", badges::router())
+        .nest("/api/v1/repos", forks::router())
         .nest("/api/v1/auth", signing::router())
+        .nest("/api/v1/user/ssh-keys", ssh_keys::router())
         .nest("/api/v1/registry", ark::router())
         .nest("/api/v1/audit", audit::router())
         // OCI Distribution Spec — /v2/ routes
         .merge(oci::router())
+        // Git LFS — /{owner}/{name}.git/info/lfs/...
+        .merge(lfs::router())
         // Git smart HTTP — no prefix, matches /{owner}/{name}.git/...
         .merge(git::router())
         .layer(cors)

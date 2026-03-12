@@ -311,6 +311,35 @@ pub async fn get_step_logs(pool: &SqlitePool, job_id: &str) -> Result<Vec<StepLo
         .collect())
 }
 
+/// Get the latest pipeline run for a repo, optionally filtered by branch.
+pub async fn get_latest(
+    pool: &SqlitePool,
+    repo_id: &str,
+    branch: Option<&str>,
+) -> Result<Option<PipelineRun>> {
+    let row = if let Some(branch) = branch {
+        sqlx::query_as::<_, PipelineRow>(
+            "SELECT * FROM pipeline_runs WHERE repo_id = ? AND trigger_ref = ?
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(repo_id)
+        .bind(branch)
+        .fetch_optional(pool)
+        .await
+    } else {
+        sqlx::query_as::<_, PipelineRow>(
+            "SELECT * FROM pipeline_runs WHERE repo_id = ?
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(repo_id)
+        .fetch_optional(pool)
+        .await
+    }
+    .map_err(|e| DeltaError::Pipeline(e.to_string()))?;
+
+    Ok(row.map(|r| r.into_run()))
+}
+
 // --- Row types ---
 
 #[derive(sqlx::FromRow)]

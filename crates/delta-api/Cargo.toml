@@ -34,6 +34,7 @@ bytes = { workspace = true }
 ed25519-dalek = { workspace = true }
 sha2 = { workspace = true }
 hex = "0.4"
+russh = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

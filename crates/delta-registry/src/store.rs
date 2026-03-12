@@ -20,7 +20,7 @@ impl BlobStore {
     /// Store bytes, returning the BLAKE3 content hash.
     pub fn store(&self, data: &[u8]) -> std::io::Result<String> {
         let hash = blake3::hash(data).to_hex().to_string();
-        let path = self.blob_path(&hash);
+        let path = self.blob_path(&hash)?;
 
         if path.exists() {
             return Ok(hash); // Deduplicated
@@ -36,17 +36,17 @@ impl BlobStore {
 
     /// Read bytes by content hash.
     pub fn read(&self, hash: &str) -> std::io::Result<Vec<u8>> {
-        std::fs::read(self.blob_path(hash))
+        std::fs::read(self.blob_path(hash)?)
     }
 
     /// Check if a blob exists.
     pub fn exists(&self, hash: &str) -> bool {
-        self.blob_path(hash).exists()
+        self.blob_path(hash).map(|p| p.exists()).unwrap_or(false)
     }
 
     /// Delete a blob by hash.
     pub fn delete(&self, hash: &str) -> std::io::Result<()> {
-        let path = self.blob_path(hash);
+        let path = self.blob_path(hash)?;
         if path.exists() {
             std::fs::remove_file(&path)?;
         }
@@ -55,18 +55,20 @@ impl BlobStore {
 
     /// Get the size of a blob.
     pub fn size(&self, hash: &str) -> std::io::Result<u64> {
-        Ok(std::fs::metadata(self.blob_path(hash))?.len())
+        Ok(std::fs::metadata(self.blob_path(hash)?)?.len())
     }
 
     /// Path for a blob — uses first 2 chars of hash as directory prefix
     /// to avoid too many files in one directory.
-    fn blob_path(&self, hash: &str) -> PathBuf {
-        assert!(
-            !hash.is_empty() && hash.chars().all(|c| c.is_ascii_hexdigit()),
-            "invalid blob hash"
-        );
+    fn blob_path(&self, hash: &str) -> std::io::Result<PathBuf> {
+        if hash.is_empty() || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid blob hash",
+            ));
+        }
         let (prefix, rest) = hash.split_at(2.min(hash.len()));
-        self.base_dir.join(prefix).join(rest)
+        Ok(self.base_dir.join(prefix).join(rest))
     }
 }
 

@@ -3,7 +3,7 @@
 //! Connects the workflow parser, trigger system, executor, and database
 //! to run pipelines triggered by repository events.
 
-use crate::executor::{execute_job, resolve_job_order};
+use crate::executor::{execute_job, expand_workflow_matrices};
 use crate::parser::load_workflows;
 use crate::trigger::{self, Event};
 use delta_core::db;
@@ -72,9 +72,9 @@ async fn run_pipelines(
             }
         };
 
-        // Resolve job execution order
-        let job_order = match resolve_job_order(workflow) {
-            Ok(order) => order,
+        // Expand matrix jobs and resolve execution order
+        let (expanded_jobs, job_order) = match expand_workflow_matrices(workflow) {
+            Ok(result) => result,
             Err(e) => {
                 tracing::error!(workflow = filename, "invalid job graph: {}", e);
                 if let Err(e) = db::pipeline::update_pipeline_status(
@@ -114,12 +114,18 @@ async fn run_pipelines(
         let mut pipeline_passed = true;
 
         for job_name in &job_order {
-            let Some(job) = workflow.jobs.get(job_name) else {
+            let Some(expanded) = expanded_jobs.get(job_name) else {
                 continue;
             };
 
-            // Create job record
-            let job_run = match db::pipeline::create_job(ctx.pool, &pipeline.id, job_name).await {
+            // Create job record with display name (includes matrix values)
+            let job_run = match db::pipeline::create_job(
+                ctx.pool,
+                &pipeline.id,
+                &expanded.display_name,
+            )
+            .await
+            {
                 Ok(j) => j,
                 Err(e) => {
                     tracing::error!(job = job_name, "failed to create job record: {}", e);
@@ -140,15 +146,54 @@ async fn run_pipelines(
                 tracing::error!(job_id = %job_run.id, "failed to mark job as running: {}", e);
             }
 
+            // Inject MATRIX_* env vars for this instance
+            let mut job_env = env_vars.clone();
+            for (dim, val) in &expanded.matrix_values {
+                job_env.insert(format!("MATRIX_{}", dim.to_uppercase()), val.clone());
+            }
+
             // Execute the job
-            let result = execute_job(job_name, job, ctx.repo_path, &env_vars).await;
+            let result =
+                execute_job(&expanded.display_name, &expanded.job, ctx.repo_path, &job_env).await;
 
             // Store step logs (mask secret values)
             for (idx, step) in result.steps.iter().enumerate() {
                 let mut output = format!("{}{}", step.stdout, step.stderr);
                 for (_, secret_value) in ctx.secrets.iter() {
                     if !secret_value.is_empty() {
-                        output = output.replace(secret_value, "***");
+                        // Case-insensitive masking (char-safe for UTF-8)
+                        let lower_secret = secret_value.to_lowercase();
+                        let secret_chars: Vec<char> = lower_secret.chars().collect();
+                        let output_chars: Vec<char> = output.chars().collect();
+                        let lower_chars: Vec<char> = output.to_lowercase().chars().collect();
+                        let mut masked = String::with_capacity(output.len());
+                        let mut i = 0;
+                        while i < output_chars.len() {
+                            if i + secret_chars.len() <= lower_chars.len()
+                                && lower_chars[i..i + secret_chars.len()] == secret_chars[..]
+                            {
+                                masked.push_str("***");
+                                i += secret_chars.len();
+                            } else {
+                                masked.push(output_chars[i]);
+                                i += 1;
+                            }
+                        }
+                        output = masked;
+                        // Also mask URL-encoded form
+                        let url_encoded: String = secret_value
+                            .bytes()
+                            .map(|b| {
+                                if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
+                                    (b as char).to_string()
+                                } else {
+                                    format!("%{:02X}", b)
+                                }
+                            })
+                            .collect();
+                        if url_encoded != *secret_value {
+                            output = output.replace(&url_encoded, "***");
+                        }
                     }
                 }
                 let status = if step.exit_code == 0 {
@@ -185,7 +230,13 @@ async fn run_pipelines(
 
             if !result.success {
                 pipeline_passed = false;
-                break;
+                if expanded.fail_fast {
+                    tracing::info!(
+                        job = &expanded.display_name,
+                        "fail_fast: stopping remaining matrix jobs"
+                    );
+                    break;
+                }
             }
         }
 

@@ -22,7 +22,8 @@ pub async fn diff_refs(repo_path: &Path, base: &str, head: &str) -> Result<Strin
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(DeltaError::Storage(format!("git diff failed: {}", stderr)));
+        tracing::error!("git diff failed: {}", stderr);
+        return Err(DeltaError::Storage("git diff failed".into()));
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -48,10 +49,8 @@ pub async fn diff_stat(repo_path: &Path, base: &str, head: &str) -> Result<DiffS
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(DeltaError::Storage(format!(
-            "git diff --stat failed: {}",
-            stderr
-        )));
+        tracing::error!("git diff --stat failed: {}", stderr);
+        return Err(DeltaError::Storage("git diff --stat failed".into()));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -102,7 +101,8 @@ pub async fn list_commits(repo_path: &Path, base: &str, head: &str) -> Result<Ve
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(DeltaError::Storage(format!("git log failed: {}", stderr)));
+        tracing::error!("git log failed: {}", stderr);
+        return Err(DeltaError::Storage("git log failed".into()));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);

@@ -31,6 +31,7 @@ struct RepoResponse {
     description: Option<String>,
     visibility: String,
     default_branch: String,
+    forked_from: Option<String>,
     created_at: String,
     updated_at: String,
 }
@@ -45,6 +46,7 @@ impl RepoResponse {
             description: repo.description,
             visibility: repo.visibility.as_str().to_string(),
             default_branch: repo.default_branch,
+            forked_from: repo.forked_from.map(|id| id.to_string()),
             created_at: repo.created_at.to_rfc3339(),
             updated_at: repo.updated_at.to_rfc3339(),
         }

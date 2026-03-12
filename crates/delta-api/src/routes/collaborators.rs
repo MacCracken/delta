@@ -187,6 +187,11 @@ async fn update_collaborator(
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, format!("user '{}' not found", username)))?;
 
+    // Cannot change the owner's role
+    if target_user.id == owner_user.id {
+        return Err((StatusCode::BAD_REQUEST, "cannot modify owner role".into()));
+    }
+
     let collab = db::collaborator::set(
         &state.db,
         &repo.id.to_string(),
@@ -201,6 +206,17 @@ async fn update_collaborator(
             "internal server error".into(),
         )
     })?;
+
+    let _ = db::audit::log(
+        &state.db,
+        Some(&user.id.to_string()),
+        "update_collaborator",
+        "repository",
+        Some(&repo.id.to_string()),
+        Some(&format!("{}/{} -> {} ({})", owner, name, username, req.role)),
+        None,
+    )
+    .await;
 
     Ok(Json(CollaboratorResponse {
         username: target_user.username,

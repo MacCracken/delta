@@ -1,5 +1,5 @@
 use delta_core::DeltaConfig;
-use delta_registry::BlobStore;
+use delta_registry::{BlobStore, LfsStore};
 use delta_vcs::RepoHost;
 use sqlx::SqlitePool;
 use std::sync::Arc;
@@ -10,6 +10,7 @@ pub struct AppState {
     pub config: Arc<DeltaConfig>,
     pub repo_host: Arc<RepoHost>,
     pub blob_store: Arc<BlobStore>,
+    pub lfs_store: Arc<LfsStore>,
     pub db: SqlitePool,
 }
 
@@ -17,10 +18,12 @@ impl AppState {
     pub fn new(config: DeltaConfig, db: SqlitePool) -> Self {
         let repo_host = RepoHost::new(&config.storage.repos_dir);
         let blob_store = BlobStore::new(&config.storage.artifacts_dir);
+        let lfs_store = LfsStore::new(config.storage.lfs_dir());
         Self {
             config: Arc::new(config),
             repo_host: Arc::new(repo_host),
             blob_store: Arc::new(blob_store),
+            lfs_store: Arc::new(lfs_store),
             db,
         }
     }

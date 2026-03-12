@@ -6,10 +6,12 @@
 
 pub mod ark;
 pub mod artifact;
+pub mod lfs_store;
 pub mod oci;
 pub mod retention;
 pub mod signing;
 pub mod store;
 
 pub use artifact::Artifact;
+pub use lfs_store::LfsStore;
 pub use store::BlobStore;

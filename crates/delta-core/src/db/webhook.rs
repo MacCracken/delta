@@ -16,10 +16,14 @@ pub async fn get_for_event(
     .await
     .map_err(|e| DeltaError::Storage(e.to_string()))?;
 
-    // Filter by event (events stored as JSON array)
+    // Filter by event (events stored as JSON array — parse for exact match)
     Ok(rows
         .into_iter()
-        .filter(|w| w.events.contains(event))
+        .filter(|w| {
+            serde_json::from_str::<Vec<String>>(&w.events)
+                .map(|events| events.iter().any(|e| e == event))
+                .unwrap_or(false)
+        })
         .collect())
 }
 

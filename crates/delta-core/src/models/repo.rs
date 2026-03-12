@@ -10,6 +10,7 @@ pub struct Repository {
     pub description: Option<String>,
     pub visibility: Visibility,
     pub default_branch: String,
+    pub forked_from: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -42,6 +43,7 @@ impl Repository {
             description: None,
             visibility: Visibility::Private,
             default_branch: "main".into(),
+            forked_from: None,
             created_at: now,
             updated_at: now,
         }

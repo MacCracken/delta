@@ -45,6 +45,58 @@ impl RepoHost {
             .unwrap_or(false)
     }
 
+    /// Clone a bare repository (used for forking).
+    pub fn clone_bare(
+        &self,
+        src_owner: &str,
+        src_name: &str,
+        dst_owner: &str,
+        dst_name: &str,
+    ) -> Result<PathBuf> {
+        let src = self.repo_path(src_owner, src_name)?;
+        if !src.exists() {
+            return Err(DeltaError::RepoNotFound(format!(
+                "{}/{}",
+                src_owner, src_name
+            )));
+        }
+
+        let dst = self.repo_path(dst_owner, dst_name)?;
+        if dst.exists() {
+            return Err(DeltaError::Conflict(format!(
+                "repository {}/{} already exists",
+                dst_owner, dst_name
+            )));
+        }
+
+        // Ensure parent directory exists
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let output = std::process::Command::new("git")
+            .args(["clone", "--bare"])
+            .arg(&src)
+            .arg(&dst)
+            .output()
+            .map_err(|e| DeltaError::Storage(format!("failed to run git clone: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::error!("git clone --bare failed: {}", stderr);
+            return Err(DeltaError::Storage("git clone --bare failed".into()));
+        }
+
+        tracing::info!(
+            src_owner,
+            src_name,
+            dst_owner,
+            dst_name,
+            "cloned bare repository (fork)"
+        );
+        Ok(dst)
+    }
+
     /// Delete a repository from disk.
     pub fn delete(&self, owner: &str, name: &str) -> Result<()> {
         let path = self.repo_path(owner, name)?;

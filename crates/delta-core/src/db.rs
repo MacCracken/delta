@@ -4,6 +4,7 @@ pub mod audit;
 pub mod branch_protection;
 pub mod collaborator;
 pub mod download_stats;
+pub mod lfs;
 pub mod oci;
 pub mod pipeline;
 pub mod pull_request;
@@ -12,6 +13,7 @@ pub mod repo;
 pub mod retention;
 pub mod secret;
 pub mod signing;
+pub mod ssh_key;
 pub mod status_check;
 pub mod user;
 pub mod webhook;
@@ -48,6 +50,9 @@ pub async fn init_pool(db_url: &str) -> Result<SqlitePool> {
         include_str!("../migrations/004_cicd.sql"),
         include_str!("../migrations/005_registry.sql"),
         include_str!("../migrations/006_collaborators.sql"),
+        include_str!("../migrations/007_forks_and_templates.sql"),
+        include_str!("../migrations/008_lfs.sql"),
+        include_str!("../migrations/009_cascade_fixes.sql"),
     ] {
         sqlx::query(migration)
             .execute(&pool)

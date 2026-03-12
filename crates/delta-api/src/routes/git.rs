@@ -149,8 +149,12 @@ async fn receive_pack(
     let pusher = user;
     let repo_path_clone = repo_path.clone();
     let secrets_key = state.config.auth.secrets_key.clone();
+    let webhooks_https_only = state.config.webhooks.https_only;
     tokio::spawn(async move {
-        if let Err(e) = dispatch_push_webhooks(&db, &owner_clone, &name_clone, &pusher).await {
+        if let Err(e) =
+            dispatch_push_webhooks(&db, &owner_clone, &name_clone, &pusher, webhooks_https_only)
+                .await
+        {
             tracing::warn!("webhook dispatch failed: {}", e);
         }
         if let Err(e) = dispatch_push_pipelines(
@@ -370,6 +374,7 @@ async fn dispatch_push_webhooks(
     owner: &str,
     name: &str,
     pusher: &str,
+    https_only: bool,
 ) -> delta_core::Result<()> {
     let owner_user = delta_core::db::user::get_by_username(db, owner).await?;
     let owner_id = owner_user.id.to_string();
@@ -400,6 +405,10 @@ async fn dispatch_push_webhooks(
         // Validate webhook URL: must be HTTP(S) and not target private networks
         if !webhook.url.starts_with("https://") && !webhook.url.starts_with("http://") {
             tracing::warn!(webhook_id = %webhook.id, "skipping webhook with non-HTTP URL");
+            continue;
+        }
+        if https_only && !webhook.url.starts_with("https://") {
+            tracing::warn!(webhook_id = %webhook.id, "skipping non-HTTPS webhook (https_only enabled)");
             continue;
         }
         if is_private_url(&webhook.url) {

@@ -7,11 +7,11 @@ Phases 1–5 are complete. Only remaining work is listed below.
 ## Phase 2 — Git Protocol (Remaining)
 
 - [x] Collaborator access control (push permissions beyond owner)
-- [ ] SSH transport via built-in SSH server
-- [ ] Large file support (LFS-compatible)
-- [ ] Shallow clone and partial clone support
-- [ ] Repository forking and mirroring
-- [ ] Webhook HTTPS-only enforcement (config flag)
+- [x] SSH transport via built-in SSH server
+- [x] Large file support (LFS-compatible)
+- [x] Shallow clone and partial clone support
+- [x] Repository forking and mirroring
+- [x] Webhook HTTPS-only enforcement (config flag)
 
 ## Phase 3 — Code Review (Remaining)
 
@@ -24,9 +24,9 @@ Phases 1–5 are complete. Only remaining work is listed below.
 - [ ] Sandboxed step execution (Landlock + seccomp on AGNOS)
 - [ ] Container-based runners (fallback for non-AGNOS hosts)
 - [ ] Log streaming (real-time)
-- [ ] Reusable workflow templates
-- [ ] Matrix builds (multiple OS/arch/toolchain)
-- [ ] Pipeline status badges
+- [x] Reusable workflow templates
+- [x] Matrix builds (multiple OS/arch/toolchain)
+- [x] Pipeline status badges
 
 ## Phase 5 — Artifact Registry (Complete)
 

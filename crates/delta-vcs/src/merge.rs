@@ -114,12 +114,10 @@ async fn run_git(repo_path: &Path, args: &[&str]) -> Result<()> {
         .map_err(|e| DeltaError::Storage(format!("git failed: {}", e)))?;
 
     if !output.status.success() {
+        let cmd = args.first().unwrap_or(&"");
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(DeltaError::Storage(format!(
-            "git {} failed: {}",
-            args.first().unwrap_or(&""),
-            stderr
-        )));
+        tracing::error!("git {} failed: {}", cmd, stderr);
+        return Err(DeltaError::Storage(format!("git {} failed", cmd)));
     }
     Ok(())
 }
@@ -135,12 +133,10 @@ async fn run_git_in(worktree: &Path, args: &[&str]) -> Result<()> {
         .map_err(|e| DeltaError::Storage(format!("git failed: {}", e)))?;
 
     if !output.status.success() {
+        let cmd = args.first().unwrap_or(&"");
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(DeltaError::Storage(format!(
-            "git {} failed: {}",
-            args.first().unwrap_or(&""),
-            stderr
-        )));
+        tracing::error!("git {} failed: {}", cmd, stderr);
+        return Err(DeltaError::Storage(format!("git {} failed", cmd)));
     }
     Ok(())
 }
@@ -156,12 +152,10 @@ async fn run_git_output(worktree: &Path, args: &[&str]) -> Result<String> {
         .map_err(|e| DeltaError::Storage(format!("git failed: {}", e)))?;
 
     if !output.status.success() {
+        let cmd = args.first().unwrap_or(&"");
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(DeltaError::Storage(format!(
-            "git {} failed: {}",
-            args.first().unwrap_or(&""),
-            stderr
-        )));
+        tracing::error!("git {} failed: {}", cmd, stderr);
+        return Err(DeltaError::Storage(format!("git {} failed", cmd)));
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }

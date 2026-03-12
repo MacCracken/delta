@@ -15,7 +15,10 @@ pub fn hash_password(password: &str) -> Result<String> {
 
 /// Verify a password against its hash.
 pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
-    let parsed = PasswordHash::new(hash).map_err(|e| DeltaError::AuthFailed(e.to_string()))?;
+    let parsed = match PasswordHash::new(hash) {
+        Ok(h) => h,
+        Err(_) => return Ok(false), // treat corrupted/invalid hash as non-match
+    };
     Ok(Argon2::default()
         .verify_password(password.as_bytes(), &parsed)
         .is_ok())

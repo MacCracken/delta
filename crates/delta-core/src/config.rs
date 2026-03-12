@@ -8,6 +8,10 @@ pub struct DeltaConfig {
     pub auth: AuthConfig,
     #[serde(default)]
     pub registry: RegistryConfig,
+    #[serde(default)]
+    pub webhooks: WebhookConfig,
+    #[serde(default)]
+    pub ssh: SshConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +29,18 @@ pub struct StorageConfig {
     pub repos_dir: PathBuf,
     pub artifacts_dir: PathBuf,
     pub db_url: String,
+    /// Directory for LFS object storage. Defaults to `{artifacts_dir}/lfs`.
+    #[serde(default)]
+    pub lfs_dir: Option<PathBuf>,
+}
+
+impl StorageConfig {
+    /// LFS storage directory, defaulting to `{artifacts_dir}/lfs`.
+    pub fn lfs_dir(&self) -> PathBuf {
+        self.lfs_dir
+            .clone()
+            .unwrap_or_else(|| self.artifacts_dir.join("lfs"))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +63,40 @@ pub struct RegistryConfig {
     pub max_total_bytes_per_repo: Option<u64>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WebhookConfig {
+    /// When true, only HTTPS webhook URLs are allowed. HTTP URLs are rejected.
+    #[serde(default)]
+    pub https_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SshConfig {
+    /// Enable the built-in SSH server.
+    #[serde(default)]
+    pub enabled: bool,
+    /// SSH listen port (default: 2222).
+    #[serde(default = "default_ssh_port")]
+    pub port: u16,
+    /// Path to the host ed25519 private key file.
+    /// If not set, a key is generated at `{repos_dir}/../ssh_host_ed25519_key`.
+    pub host_key_file: Option<String>,
+}
+
+impl Default for SshConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: 2222,
+            host_key_file: None,
+        }
+    }
+}
+
+fn default_ssh_port() -> u16 {
+    2222
+}
+
 fn default_secrets_key() -> String {
     "delta-change-me-in-production".into()
 }
@@ -64,6 +114,7 @@ impl Default for DeltaConfig {
                 repos_dir: PathBuf::from("/var/lib/delta/repos"),
                 artifacts_dir: PathBuf::from("/var/lib/delta/artifacts"),
                 db_url: "sqlite:///var/lib/delta/delta.db".into(),
+                lfs_dir: None,
             },
             auth: AuthConfig {
                 enabled: true,
@@ -71,6 +122,8 @@ impl Default for DeltaConfig {
                 secrets_key: default_secrets_key(),
             },
             registry: RegistryConfig::default(),
+            webhooks: WebhookConfig::default(),
+            ssh: SshConfig::default(),
         }
     }
 }

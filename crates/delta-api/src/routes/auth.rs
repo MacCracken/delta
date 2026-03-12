@@ -60,6 +60,20 @@ async fn register(
                 .into(),
         ));
     }
+    // Validate email: basic format check
+    if req.email.is_empty()
+        || req.email.len() > 254
+        || !req.email.contains('@')
+        || req.email.starts_with('@')
+        || req.email.ends_with('@')
+        || req.email.contains("..")
+        || req.email.contains('\0')
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "invalid email address".into(),
+        ));
+    }
     if req.password.len() < 8 {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -193,6 +207,31 @@ async fn create_token(
     AuthUser(user): AuthUser,
     Json(req): Json<CreateTokenRequest>,
 ) -> Result<(StatusCode, Json<TokenResponse>), (StatusCode, String)> {
+    // Validate token name
+    if req.name.is_empty() || req.name.len() > 64 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "token name must be 1-64 characters".into(),
+        ));
+    }
+    if req.name.contains('\0') || req.name.chars().any(|c| c.is_control()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "token name contains invalid characters".into(),
+        ));
+    }
+    // Validate scopes
+    const VALID_SCOPES: &[&str] = &["*", "read", "write", "admin", "repo", "user"];
+    for scope in req.scopes.split(',') {
+        let s = scope.trim();
+        if !VALID_SCOPES.contains(&s) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("invalid scope: {}", s),
+            ));
+        }
+    }
+
     let (raw_token, token_hash) = auth::generate_token().map_err(|e| {
         tracing::error!("internal error: {}", e);
         (

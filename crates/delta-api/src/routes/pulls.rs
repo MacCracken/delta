@@ -193,10 +193,16 @@ async fn create_pull(
             "body must be at most 65536 characters".into(),
         ));
     }
-    if req.head_branch.is_empty() || req.head_branch.len() > 256 {
+    if req.head_branch.is_empty()
+        || req.head_branch.len() > 256
+        || !is_valid_branch_name(&req.head_branch)
+    {
         return Err((StatusCode::BAD_REQUEST, "invalid head branch name".into()));
     }
-    if req.base_branch.is_empty() || req.base_branch.len() > 256 {
+    if req.base_branch.is_empty()
+        || req.base_branch.len() > 256
+        || !is_valid_branch_name(&req.base_branch)
+    {
         return Err((StatusCode::BAD_REQUEST, "invalid base branch name".into()));
     }
 
@@ -280,6 +286,28 @@ async fn update_pull(
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
 
+    if pr.state != PrState::Open {
+        return Err((StatusCode::CONFLICT, "can only update open pull requests".into()));
+    }
+
+    // Validate input lengths
+    if let Some(ref title) = req.title
+        && (title.is_empty() || title.len() > 256)
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "title must be 1-256 characters".into(),
+        ));
+    }
+    if let Some(ref body) = req.body
+        && body.len() > 65536
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "body must be at most 65536 characters".into(),
+        ));
+    }
+
     // Author, owner, or write+ collaborators can update
     if pr.author_id != user.id {
         let owner_user = db::user::get_by_id(&state.db, &repo.owner)
@@ -357,17 +385,25 @@ async fn merge_pull(
         }
 
         // Check status checks
-        if protection.require_status_checks
-            && let Some(sha) = &pr.head_sha
-        {
-            let passed = db::status_check::all_passed(&state.db, &repo_id, sha)
-                .await
-                .unwrap_or(false);
-            if !passed {
-                return Err((
-                    StatusCode::CONFLICT,
-                    "status checks have not all passed".into(),
-                ));
+        if protection.require_status_checks {
+            match &pr.head_sha {
+                Some(sha) => {
+                    let passed = db::status_check::all_passed(&state.db, &repo_id, sha)
+                        .await
+                        .unwrap_or(false);
+                    if !passed {
+                        return Err((
+                            StatusCode::CONFLICT,
+                            "status checks have not all passed".into(),
+                        ));
+                    }
+                }
+                None => {
+                    return Err((
+                        StatusCode::CONFLICT,
+                        "cannot verify status checks: head SHA is unknown".into(),
+                    ));
+                }
             }
         }
     }
@@ -389,6 +425,12 @@ async fn merge_pull(
             pr.number, pr.head_branch, pr.title
         )
     });
+    if merge_message.len() > 4096 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "merge message too long (max 4096 characters)".into(),
+        ));
+    }
 
     let _merge_sha = delta_vcs::merge::execute_merge(
         &repo_path,
@@ -741,4 +783,16 @@ async fn submit_review(
             created_at: review.created_at.to_rfc3339(),
         }),
     ))
+}
+
+/// Validate branch name: no null bytes, control chars, spaces, `..`, `~`, `^`, `:`, `\`, `?`, `*`, `[`.
+fn is_valid_branch_name(name: &str) -> bool {
+    !name.contains('\0')
+        && !name.contains("..")
+        && !name.ends_with('.')
+        && !name.ends_with('/')
+        && !name.starts_with('-')
+        && !name.chars().any(|c| {
+            c.is_control() || matches!(c, ' ' | '~' | '^' | ':' | '\\' | '?' | '*' | '[')
+        })
 }
