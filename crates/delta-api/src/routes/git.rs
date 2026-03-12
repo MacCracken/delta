@@ -62,7 +62,7 @@ async fn info_refs(
 
     // For receive-pack (push), require authentication
     if query.service == "git-receive-pack" {
-        authenticate_git_request(&state, &headers, &owner)
+        authenticate_git_request(&state, &headers, &owner, name)
             .await
             .map_err(|e| (StatusCode::UNAUTHORIZED, e))?;
     } else {
@@ -134,7 +134,7 @@ async fn receive_pack(
     }
 
     // Push always requires auth
-    let user = authenticate_git_request(&state, &headers, &owner)
+    let user = authenticate_git_request(&state, &headers, &owner, name)
         .await
         .map_err(|e| (StatusCode::UNAUTHORIZED, e))?;
 
@@ -178,10 +178,12 @@ async fn receive_pack(
 }
 
 /// Authenticate a git HTTP request using Basic auth (username + token).
+/// For push operations, verifies the user is the owner or has write+ collaborator access.
 async fn authenticate_git_request(
     state: &AppState,
     headers: &HeaderMap,
     expected_owner: &str,
+    repo_name: &str,
 ) -> std::result::Result<String, String> {
     let auth_header = headers
         .get(header::AUTHORIZATION)
@@ -211,16 +213,41 @@ async fn authenticate_git_request(
         return Err("username mismatch".to_string());
     }
 
-    // For push, verify ownership
+    // Owner always has push access
     if user.username != expected_owner {
-        // TODO: check collaborator access
-        return Err("you don't have push access to this repository".to_string());
+        // Check collaborator write access
+        let owner_user = delta_core::db::user::get_by_username(&state.db, expected_owner)
+            .await
+            .map_err(|_| "repository owner not found".to_string())?;
+        let owner_id = owner_user.id.to_string();
+        let repo = delta_core::db::repo::get_by_owner_and_name(&state.db, &owner_id, repo_name)
+            .await
+            .map_err(|_| "repository not found".to_string())?;
+        let role = delta_core::db::collaborator::get_role(
+            &state.db,
+            &repo.id.to_string(),
+            &user.id.to_string(),
+        )
+        .await
+        .unwrap_or(None);
+        match role {
+            Some(r)
+                if r.has(delta_core::models::collaborator::CollaboratorRole::Write) =>
+            {
+                // Collaborator with write access — allowed
+            }
+            _ => {
+                return Err(
+                    "you don't have push access to this repository".to_string(),
+                );
+            }
+        }
     }
 
     Ok(user.username)
 }
 
-/// Check read access — public repos are open, private repos need auth.
+/// Check read access — public repos are open, private repos need owner or collaborator auth.
 async fn check_read_access(
     state: &AppState,
     owner: &str,
@@ -230,21 +257,76 @@ async fn check_read_access(
     // Look up repo visibility
     let owner_user = delta_core::db::user::get_by_username(&state.db, owner).await;
 
-    if let Ok(owner_user) = owner_user {
+    if let Ok(ref owner_user) = owner_user {
         let owner_id = owner_user.id.to_string();
         if let Ok(repo) =
             delta_core::db::repo::get_by_owner_and_name(&state.db, &owner_id, name).await
-            && repo.visibility == delta_core::models::repo::Visibility::Public
         {
-            return Ok(());
+            if repo.visibility == delta_core::models::repo::Visibility::Public {
+                return Ok(());
+            }
+            // Private repo — try to authenticate and check access
+            let auth_result = authenticate_git_user(state, headers).await;
+            match auth_result {
+                Ok(user) => {
+                    if user.username == owner {
+                        return Ok(());
+                    }
+                    // Check collaborator read access
+                    let role = delta_core::db::collaborator::get_role(
+                        &state.db,
+                        &repo.id.to_string(),
+                        &user.id.to_string(),
+                    )
+                    .await
+                    .unwrap_or(None);
+                    if role.is_some() {
+                        return Ok(());
+                    }
+                    return Err((StatusCode::NOT_FOUND, "repository not found".into()));
+                }
+                Err(e) => return Err((StatusCode::UNAUTHORIZED, e)),
+            }
         }
     }
 
-    // Private or unknown — require auth
-    authenticate_git_request(state, headers, owner)
+    Err((StatusCode::NOT_FOUND, "repository not found".into()))
+}
+
+/// Authenticate a git HTTP request (Basic auth) and return the User.
+/// Does NOT check repository-level permissions.
+async fn authenticate_git_user(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> std::result::Result<delta_core::models::user::User, String> {
+    let auth_header = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .ok_or("authentication required")?;
+
+    let credentials = auth_header
+        .strip_prefix("Basic ")
+        .ok_or("invalid auth format — use Basic auth with token as password")?;
+
+    let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, credentials)
+        .map_err(|_| "invalid base64 credentials".to_string())?;
+
+    let decoded_str =
+        String::from_utf8(decoded).map_err(|_| "invalid utf-8 credentials".to_string())?;
+
+    let (username, token) = decoded_str
+        .split_once(':')
+        .ok_or("invalid credential format")?;
+
+    let user = crate::auth::authenticate_token(&state.db, token)
         .await
-        .map(|_| ())
-        .map_err(|e| (StatusCode::UNAUTHORIZED, e))
+        .map_err(|_| "invalid or expired token".to_string())?;
+
+    if user.username != username {
+        return Err("username mismatch".to_string());
+    }
+
+    Ok(user)
 }
 
 /// Check if a host is in the 172.16.0.0/12 private range (172.16.x - 172.31.x).

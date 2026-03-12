@@ -2,6 +2,7 @@ pub mod ark_package;
 pub mod artifact;
 pub mod audit;
 pub mod branch_protection;
+pub mod collaborator;
 pub mod download_stats;
 pub mod oci;
 pub mod pipeline;
@@ -46,6 +47,7 @@ pub async fn init_pool(db_url: &str) -> Result<SqlitePool> {
         include_str!("../migrations/003_pull_requests.sql"),
         include_str!("../migrations/004_cicd.sql"),
         include_str!("../migrations/005_registry.sql"),
+        include_str!("../migrations/006_collaborators.sql"),
     ] {
         sqlx::query(migration)
             .execute(&pool)

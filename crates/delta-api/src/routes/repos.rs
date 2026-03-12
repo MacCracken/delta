@@ -5,10 +5,12 @@ use axum::{
     routing::get,
 };
 use delta_core::db;
+use delta_core::models::collaborator::CollaboratorRole;
 use delta_core::models::repo::Visibility;
 use serde::{Deserialize, Serialize};
 
 use crate::extractors::{AuthUser, MaybeAuthUser};
+use crate::helpers::require_role;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -166,14 +168,28 @@ async fn get_repo(
             )
         })?;
 
-    // Check visibility — non-public repos require owner
+    // Check visibility — non-public repos require owner or collaborator
     if repo.visibility != Visibility::Public {
         let is_owner = user.as_ref().is_some_and(|u| u.id == owner_user.id);
         if !is_owner {
-            return Err((
-                StatusCode::NOT_FOUND,
-                format!("repository '{}/{}' not found", owner, name),
-            ));
+            let is_collab = if let Some(u) = &user {
+                db::collaborator::get_role(
+                    &state.db,
+                    &repo.id.to_string(),
+                    &u.id.to_string(),
+                )
+                .await
+                .unwrap_or(None)
+                .is_some()
+            } else {
+                false
+            };
+            if !is_collab {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    format!("repository '{}/{}' not found", owner, name),
+                ));
+            }
         }
     }
 
@@ -197,14 +213,12 @@ async fn update_repo(
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, format!("user '{}' not found", owner)))?;
 
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
-
     let owner_id = owner_user.id.to_string();
     let repo = db::repo::get_by_owner_and_name(&state.db, &owner_id, &name)
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "repository not found".to_string()))?;
+
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Admin).await?;
 
     let visibility = req.visibility.as_deref().map(|v| match v {
         "public" => Visibility::Public,
@@ -240,8 +254,9 @@ async fn delete_repo(
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, format!("user '{}' not found", owner)))?;
 
+    // Only the owner can delete a repository
     if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
+        return Err((StatusCode::FORBIDDEN, "only the owner can delete a repository".into()));
     }
 
     let owner_id = owner_user.id.to_string();

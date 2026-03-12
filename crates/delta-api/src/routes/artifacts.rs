@@ -11,8 +11,10 @@ use delta_core::db;
 use delta_registry::retention;
 use serde::{Deserialize, Serialize};
 
+use delta_core::models::collaborator::CollaboratorRole;
+
 use crate::extractors::AuthUser;
-use crate::helpers::resolve_repo_authed;
+use crate::helpers::{require_role, resolve_repo_authed};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -96,9 +98,7 @@ async fn upload_artifact(
     }
 
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
 
     // Store in blob store
     let content_hash = state.blob_store.store(&body).map_err(|e| {
@@ -202,9 +202,7 @@ async fn delete_artifact(
     AuthUser(user): AuthUser,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
     let artifact = db::artifact::get(&state.db, &artifact_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
@@ -436,9 +434,7 @@ async fn set_retention(
     Json(req): Json<SetRetentionRequest>,
 ) -> Result<Json<db::retention::RetentionPolicy>, (StatusCode, String)> {
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Admin).await?;
 
     let policy = db::retention::set_policy(
         &state.db,
@@ -467,9 +463,7 @@ async fn run_cleanup(
     AuthUser(user): AuthUser,
 ) -> Result<Json<retention::CleanupReport>, (StatusCode, String)> {
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Admin).await?;
 
     let repo_id = repo.id.to_string();
 
@@ -573,9 +567,7 @@ async fn create_release(
     }
 
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
     let release = db::release::create(
         &state.db,
         &db::release::CreateReleaseParams {
@@ -611,9 +603,7 @@ async fn delete_release(
     AuthUser(user): AuthUser,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
     let release = db::release::get_by_tag(&state.db, &repo.id.to_string(), &tag)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;

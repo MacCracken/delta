@@ -6,10 +6,19 @@ async fn setup_pool() -> sqlx::SqlitePool {
         .await
         .expect("failed to connect to in-memory db");
 
-    sqlx::query(include_str!("../migrations/001_initial.sql"))
-        .execute(&pool)
-        .await
-        .expect("failed to run migrations");
+    for migration in [
+        include_str!("../migrations/001_initial.sql"),
+        include_str!("../migrations/002_git_protocol.sql"),
+        include_str!("../migrations/003_pull_requests.sql"),
+        include_str!("../migrations/004_cicd.sql"),
+        include_str!("../migrations/005_registry.sql"),
+        include_str!("../migrations/006_collaborators.sql"),
+    ] {
+        sqlx::query(migration)
+            .execute(&pool)
+            .await
+            .expect("failed to run migration");
+    }
 
     pool
 }

@@ -8,8 +8,10 @@ use delta_core::db;
 use delta_core::models::pull_request::*;
 use serde::{Deserialize, Serialize};
 
+use delta_core::models::collaborator::CollaboratorRole;
+
 use crate::extractors::AuthUser;
-use crate::helpers::resolve_repo_authed;
+use crate::helpers::{require_role, resolve_repo_authed};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -278,9 +280,12 @@ async fn update_pull(
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
 
-    // Only author or repo owner can update
-    if pr.author_id != user.id && repo.owner != user.id.to_string() {
-        return Err((StatusCode::FORBIDDEN, "not authorized".into()));
+    // Author, owner, or write+ collaborators can update
+    if pr.author_id != user.id {
+        let owner_user = db::user::get_by_id(&state.db, &repo.owner)
+            .await
+            .map_err(|_| (StatusCode::NOT_FOUND, "owner not found".into()))?;
+        require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
     }
 
     let updated = db::pull_request::update_title_body(
@@ -321,13 +326,7 @@ async fn merge_pull(
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let repo_id = repo.id.to_string();
 
-    // Only repo owner can merge (for now)
-    if user.id != owner_user.id {
-        return Err((
-            StatusCode::FORBIDDEN,
-            "only the repo owner can merge".into(),
-        ));
-    }
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
 
     let pr = db::pull_request::get_by_number(&state.db, &repo_id, number)
         .await
@@ -434,8 +433,8 @@ async fn close_pull(
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
 
-    if pr.author_id != user.id && user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not authorized".into()));
+    if pr.author_id != user.id {
+        require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
     }
 
     let closed = db::pull_request::close(&state.db, &pr.id.to_string())
@@ -463,8 +462,8 @@ async fn reopen_pull(
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
 
-    if pr.author_id != user.id && user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not authorized".into()));
+    if pr.author_id != user.id {
+        require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
     }
 
     let reopened = db::pull_request::reopen(&state.db, &pr.id.to_string())

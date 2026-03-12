@@ -11,8 +11,10 @@ use delta_core::db;
 use delta_registry::oci::{OciStagingArea, sha256_digest};
 use serde::{Deserialize, Serialize};
 
+use delta_core::models::collaborator::CollaboratorRole;
+
 use crate::extractors::AuthUser;
-use crate::helpers::resolve_repo_authed;
+use crate::helpers::{require_role, resolve_repo_authed};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -96,9 +98,7 @@ async fn delete_blob(
     AuthUser(user): AuthUser,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
 
     let blob = db::oci::get_repo_blob(&state.db, &repo.id.to_string(), &digest)
         .await
@@ -130,9 +130,7 @@ async fn initiate_upload(
     body: Bytes,
 ) -> Result<(StatusCode, HeaderMap), (StatusCode, String)> {
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
 
     let repo_id = repo.id.to_string();
 
@@ -186,10 +184,8 @@ async fn upload_chunk(
     AuthUser(user): AuthUser,
     body: Bytes,
 ) -> Result<(StatusCode, HeaderMap), (StatusCode, String)> {
-    let (_, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
+    let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
 
     let upload = db::oci::get_blob_upload(&state.db, &uuid)
         .await
@@ -235,9 +231,7 @@ async fn complete_upload(
     body: Bytes,
 ) -> Result<(StatusCode, HeaderMap), (StatusCode, String)> {
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
 
     let digest = query.digest.ok_or((
         StatusCode::BAD_REQUEST,
@@ -339,9 +333,7 @@ async fn push_manifest(
     body: Bytes,
 ) -> Result<(StatusCode, HeaderMap), (StatusCode, String)> {
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
 
     let media_type = headers
         .get(header::CONTENT_TYPE)
@@ -401,9 +393,7 @@ async fn oci_delete_manifest(
     AuthUser(user): AuthUser,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
 
     let manifest = resolve_manifest(&state, &repo.id.to_string(), &reference).await?;
 

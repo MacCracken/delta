@@ -6,7 +6,7 @@ Phases 1–5 are complete. Only remaining work is listed below.
 
 ## Phase 2 — Git Protocol (Remaining)
 
-- [ ] Collaborator access control (push permissions beyond owner)
+- [x] Collaborator access control (push permissions beyond owner)
 - [ ] SSH transport via built-in SSH server
 - [ ] Large file support (LFS-compatible)
 - [ ] Shallow clone and partial clone support

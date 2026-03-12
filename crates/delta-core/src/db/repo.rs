@@ -83,12 +83,16 @@ pub async fn list_by_owner(pool: &SqlitePool, owner_id: &str) -> Result<Vec<Repo
     Ok(rows.into_iter().map(|r| r.into_repo()).collect())
 }
 
-/// List all visible repositories (public + user's own).
+/// List all visible repositories (public + user's own + collaborations).
 pub async fn list_visible(pool: &SqlitePool, viewer_id: Option<&str>) -> Result<Vec<Repository>> {
     let rows = if let Some(uid) = viewer_id {
         sqlx::query_as::<_, RepoRow>(
-            "SELECT * FROM repositories WHERE visibility = 'public' OR owner_id = ? ORDER BY updated_at DESC",
+            "SELECT DISTINCT r.* FROM repositories r
+             LEFT JOIN repository_collaborators c ON r.id = c.repo_id AND c.user_id = ?
+             WHERE r.visibility = 'public' OR r.owner_id = ? OR c.user_id IS NOT NULL
+             ORDER BY r.updated_at DESC",
         )
+        .bind(uid)
         .bind(uid)
         .fetch_all(pool)
         .await

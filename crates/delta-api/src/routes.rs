@@ -3,6 +3,7 @@ pub mod artifacts;
 pub mod audit;
 pub mod auth;
 pub mod branches;
+pub mod collaborators;
 pub mod git;
 pub mod health;
 pub mod oci;
@@ -49,6 +50,7 @@ pub fn router(state: AppState) -> Router {
         .nest("/api/v1/auth", auth::router())
         .nest("/api/v1/repos", repos::router())
         .nest("/api/v1/repos", branches::router())
+        .nest("/api/v1/repos", collaborators::router())
         .nest("/api/v1/repos", webhooks::router())
         .nest("/api/v1/repos", pulls::router())
         .nest("/api/v1/repos", status_checks::router())

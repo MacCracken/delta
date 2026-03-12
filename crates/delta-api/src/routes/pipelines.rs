@@ -9,8 +9,10 @@ use axum::{
 use delta_core::db;
 use serde::{Deserialize, Serialize};
 
+use delta_core::models::collaborator::CollaboratorRole;
+
 use crate::extractors::AuthUser;
-use crate::helpers::resolve_repo_authed;
+use crate::helpers::{require_role, resolve_repo_authed};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -96,9 +98,7 @@ async fn trigger_pipeline(
     Json(req): Json<TriggerPipelineRequest>,
 ) -> Result<(StatusCode, Json<db::pipeline::PipelineRun>), (StatusCode, String)> {
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
     let run = db::pipeline::create_pipeline(
         &state.db,
         &repo.id.to_string(),
@@ -139,9 +139,7 @@ async fn cancel_pipeline(
     AuthUser(user): AuthUser,
 ) -> Result<Json<db::pipeline::PipelineRun>, (StatusCode, String)> {
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
     let existing = db::pipeline::get_pipeline(&state.db, &pipeline_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
@@ -220,9 +218,7 @@ async fn list_secrets(
     AuthUser(user): AuthUser,
 ) -> Result<Json<Vec<SecretResponse>>, (StatusCode, String)> {
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Admin).await?;
     let secrets = db::secret::list(&state.db, &repo.id.to_string())
         .await
         .map_err(|e| {
@@ -284,9 +280,7 @@ async fn set_secret(
     }
 
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Admin).await?;
     let encryption_key = delta_core::crypto::derive_key(&state.config.auth.secrets_key);
     let encrypted = delta_core::crypto::encrypt(&encryption_key, req.value.as_bytes());
     let repo_id = repo.id.to_string();
@@ -329,9 +323,7 @@ async fn delete_secret(
     AuthUser(user): AuthUser,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Admin).await?;
     db::secret::delete(&state.db, &repo.id.to_string(), &secret_name)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;

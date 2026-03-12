@@ -6,8 +6,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use delta_core::models::collaborator::CollaboratorRole;
+
 use crate::extractors::AuthUser;
-use crate::helpers::resolve_repo_authed;
+use crate::helpers::{require_role, resolve_repo_authed};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -88,14 +90,12 @@ async fn list_protections(
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "user not found".into()))?;
 
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
-
     let owner_id = owner_user.id.to_string();
     let repo = delta_core::db::repo::get_by_owner_and_name(&state.db, &owner_id, &name)
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "repository not found".into()))?;
+
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Admin).await?;
 
     let protections =
         delta_core::db::branch_protection::list_for_repo(&state.db, &repo.id.to_string())
@@ -153,14 +153,12 @@ async fn create_protection(
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "user not found".into()))?;
 
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
-
     let owner_id = owner_user.id.to_string();
     let repo = delta_core::db::repo::get_by_owner_and_name(&state.db, &owner_id, &name)
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "repository not found".into()))?;
+
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Admin).await?;
 
     let protection = delta_core::db::branch_protection::create(
         &state.db,
@@ -200,15 +198,12 @@ async fn delete_protection(
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "user not found".into()))?;
 
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
-
-    // Verify the repo exists and protection belongs to it
     let owner_id = owner_user.id.to_string();
     let repo = delta_core::db::repo::get_by_owner_and_name(&state.db, &owner_id, &name)
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "repository not found".into()))?;
+
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Admin).await?;
 
     // Verify protection belongs to this repo before deleting
     let protections =

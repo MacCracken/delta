@@ -9,7 +9,10 @@ use delta_core::models::pull_request::CheckState;
 use delta_core::models::repo::Visibility;
 use serde::{Deserialize, Serialize};
 
+use delta_core::models::collaborator::CollaboratorRole;
+
 use crate::extractors::AuthUser;
+use crate::helpers::require_role;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -90,13 +93,11 @@ async fn create_status(
     let owner_user = db::user::get_by_username(&state.db, &owner)
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "user not found".into()))?;
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
     let owner_id = owner_user.id.to_string();
     let repo = db::repo::get_by_owner_and_name(&state.db, &owner_id, &name)
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "repository not found".into()))?;
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
 
     let check_state = match req.state.as_str() {
         "success" => CheckState::Success,

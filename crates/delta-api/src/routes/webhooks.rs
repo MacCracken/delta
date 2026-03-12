@@ -6,7 +6,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use delta_core::models::collaborator::CollaboratorRole;
+
 use crate::extractors::AuthUser;
+use crate::helpers::require_role;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -35,7 +38,7 @@ async fn list_webhooks(
     Path((owner, name)): Path<(String, String)>,
     AuthUser(user): AuthUser,
 ) -> Result<Json<Vec<WebhookResponse>>, (StatusCode, String)> {
-    let (repo, _) = resolve_owned_repo(&state, &owner, &name, &user).await?;
+    let (repo, _) = resolve_admin_repo(&state, &owner, &name, &user).await?;
 
     let webhooks = delta_core::db::webhook::list_for_repo(&state.db, &repo.id.to_string())
         .await
@@ -82,7 +85,7 @@ async fn create_webhook(
     AuthUser(user): AuthUser,
     Json(req): Json<CreateWebhookRequest>,
 ) -> Result<(StatusCode, Json<WebhookResponse>), (StatusCode, String)> {
-    let (repo, _) = resolve_owned_repo(&state, &owner, &name, &user).await?;
+    let (repo, _) = resolve_admin_repo(&state, &owner, &name, &user).await?;
 
     // Validate webhook URL: must be HTTP(S) and not target private networks
     if !req.url.starts_with("https://") && !req.url.starts_with("http://") {
@@ -134,7 +137,7 @@ async fn delete_webhook(
     Path((owner, name, webhook_id)): Path<(String, String, String)>,
     AuthUser(user): AuthUser,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let (repo, _) = resolve_owned_repo(&state, &owner, &name, &user).await?;
+    let (repo, _) = resolve_admin_repo(&state, &owner, &name, &user).await?;
 
     delta_core::db::webhook::delete(&state.db, &webhook_id, &repo.id.to_string())
         .await
@@ -143,8 +146,8 @@ async fn delete_webhook(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Helper: resolve repo and verify ownership.
-async fn resolve_owned_repo(
+/// Helper: resolve repo and verify admin access (owner or admin collaborator).
+async fn resolve_admin_repo(
     state: &AppState,
     owner: &str,
     name: &str,
@@ -160,14 +163,12 @@ async fn resolve_owned_repo(
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "user not found".into()))?;
 
-    if user.id != owner_user.id {
-        return Err((StatusCode::FORBIDDEN, "not the repository owner".into()));
-    }
-
     let owner_id = owner_user.id.to_string();
     let repo = delta_core::db::repo::get_by_owner_and_name(&state.db, &owner_id, name)
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "repository not found".into()))?;
+
+    require_role(state, &repo, &owner_user, user, CollaboratorRole::Admin).await?;
 
     Ok((repo, owner_user))
 }
