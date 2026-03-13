@@ -44,23 +44,23 @@
   <tbody>
     {% for p in pipelines %}
     <tr>
-      <td>
+      <td data-label="Status">
         <a href="/{{ owner }}/{{ repo }}/-/pipelines/{{ p.id }}" class="status status-{{ p.status.as_str() }}">
           <span class="status-dot"></span>
           {{ p.status.as_str() }}
         </a>
       </td>
-      <td>
+      <td data-label="Pipeline">
         <a href="/{{ owner }}/{{ repo }}/-/pipelines/{{ p.id }}">{{ p.workflow_name }}</a>
       </td>
-      <td>
+      <td data-label="Commit">
         <span class="sha">{{ p.commit_sha|truncate_sha }}</span>
       </td>
-      <td>
+      <td data-label="Trigger">
         {{ p.trigger_type }}{% match p.trigger_ref %}{% when Some with (r) %} <span class="time-ago">({{ r }})</span>{% when None %}{% endmatch %}
       </td>
-      <td><span class="time-ago">{{ p.created_at }}</span></td>
-      <td><span class="time-ago">{{ p|pipeline_duration }}</span></td>
+      <td data-label="Created"><span class="time-ago">{{ p.created_at }}</span></td>
+      <td data-label="Duration"><span class="time-ago">{{ p|pipeline_duration }}</span></td>
     </tr>
     {% endfor %}
   </tbody>

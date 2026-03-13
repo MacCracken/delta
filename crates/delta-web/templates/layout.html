@@ -285,6 +285,78 @@ tr:hover td { background: var(--bg-secondary); }
 .ws-connected { background: #0d301d; color: var(--green); }
 .ws-disconnected { background: #300d0d; color: var(--red); }
 .ws-connecting { background: #302a0d; color: var(--yellow); }
+
+/* --- Responsive --- */
+
+/* Tablet / narrow browser (<=768px) */
+@media (max-width: 768px) {
+  .container { padding: 0 16px; }
+  .page-header { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .page-header h1 { font-size: 18px; }
+  .pipeline-meta {
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    padding: 12px;
+  }
+  th, td { padding: 8px 10px; }
+  .log-viewer {
+    font-size: 12px;
+    padding: 8px 10px;
+    max-height: 400px;
+  }
+  .log-viewer .line-num { width: 2.5em; margin-right: 0.5em; }
+  .job-header { padding: 10px 12px; }
+  .job-body { padding: 12px; }
+}
+
+/* Phone (<=480px) */
+@media (max-width: 480px) {
+  .container { padding: 0 12px; }
+  header .container { gap: 10px; }
+  header nav a { padding: 4px 8px; font-size: 13px; }
+  .breadcrumb { font-size: 13px; padding: 12px 0; }
+  .page-header h1 { font-size: 16px; }
+  .pipeline-meta {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 10px;
+  }
+  .meta-item { font-size: 13px; }
+  .log-viewer { font-size: 11px; max-height: 300px; }
+  .job-header h3 { font-size: 13px; }
+  .step-header { font-size: 12px; }
+
+  /* Pipeline table: stack rows as cards on phone */
+  table, thead, tbody, th, td, tr {
+    display: block;
+  }
+  thead { display: none; }
+  tr {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 8px;
+    padding: 10px 12px;
+    background: var(--bg-secondary);
+  }
+  tr:hover td { background: transparent; }
+  td {
+    border-bottom: none;
+    padding: 3px 0;
+    font-size: 13px;
+  }
+  td::before {
+    content: attr(data-label);
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    display: block;
+    margin-bottom: 2px;
+  }
+}
+
+/* Ensure log viewer scrolls horizontally on all sizes */
+.log-viewer { -webkit-overflow-scrolling: touch; }
 </style>
 {% block head %}{% endblock %}
 </head>

@@ -19,11 +19,11 @@ Phases 1–5 are complete. Only remaining work is listed below.
 - [ ] Agent-authored PRs with provenance tracking
 - [ ] Inline suggestions with one-click apply
 
-## Phase 4 — CI/CD Engine (Remaining)
+## Phase 4 — CI/CD Engine (Complete)
 
-- [ ] Sandboxed step execution (Landlock + seccomp on AGNOS)
-- [ ] Container-based runners (fallback for non-AGNOS hosts)
-- [ ] Log streaming (real-time)
+- [x] Sandboxed step execution (Landlock + seccomp on AGNOS)
+- [x] Container-based runners (fallback for non-AGNOS hosts)
+- [x] Log streaming (real-time via WebSocket)
 - [x] Reusable workflow templates
 - [x] Matrix builds (multiple OS/arch/toolchain)
 - [x] Pipeline status badges
@@ -41,7 +41,7 @@ Phases 1–5 are complete. Only remaining work is listed below.
 - [ ] Repository browser (file tree, blame, history)
 - [ ] Commit and diff viewer
 - [ ] Pull request UI (conversation, diff, checks)
-- [ ] CI/CD dashboard (pipeline list, log viewer)
+- [x] CI/CD dashboard (pipeline list, log viewer with live streaming)
 - [ ] User/org profile pages
 - [ ] Settings and administration panels
 
@@ -69,6 +69,14 @@ Phases 1–5 are complete. Only remaining work is listed below.
 - [ ] Performance benchmarks and optimization
 - [ ] Backup and disaster recovery
 - [ ] Monitoring and alerting integration
+
+## Future / Demand-Gated
+
+Items below are not planned for any phase. They will be prioritized if there is sufficient user demand.
+
+- [ ] Desktop app (Tauri webview shell wrapping the web UI)
+- [ ] Email notifications for pipeline failures
+- [ ] IDE extensions (VS Code, Zed)
 
 ---
 
