@@ -10,6 +10,37 @@ Versioning follows [AGNOS CalVer](docs/development/versioning.md): `YYYY.M.D`.
 
 ### Added
 
+#### Phase 8 — Federation and Privacy (Complete)
+- Instance-to-instance federation protocol with instance discovery, trust management, and public key exchange
+  - `GET /api/v1/federation/info` — public endpoint for remote instance discovery
+  - `POST/GET /api/v1/federation/instances` — register and list federated instances
+  - `POST /api/v1/federation/instances/{id}/trust` — update trust status
+  - `GET /api/v1/federation/instances/{id}/repos` — browse remote instance repos
+- Cross-instance forking and mirroring
+  - `POST /api/v1/federation/mirror` — create local mirror of a remote repo via `git clone --mirror`
+  - New repo fields: `is_mirror`, `mirror_url`, `federation_instance_id`
+  - `create_mirror()` DB function for federated repo tracking
+- Private instance deployment (single binary, minimal config)
+  - `--private` CLI flag: enables auth, disables federation, conservative defaults
+  - `--data-dir` CLI flag: sets all storage paths to subdirectories of one directory
+  - Auto-creation of storage directories on startup
+  - SQLite `?mode=rwc` default for auto-creating database files
+  - Example config: `config/delta.private.toml`
+- End-to-end encrypted repositories
+  - Per-repo encryption keys wrapped with user-derived keys
+  - `repo_encryption_keys` table with per-user key wrapping
+  - `encrypted` flag on repositories
+  - `generate_repo_key()`, `wrap_repo_key()`, `unwrap_repo_key()` in crypto module
+  - Database migration `012_encryption.sql`
+- Audit log export for compliance
+  - `GET /api/v1/audit/export` — export with date range filters (`since`/`until`), resource type filter
+  - JSON and CSV output formats
+  - BLAKE3 integrity hash on JSON exports for tamper detection
+  - Pagination support with total count
+  - `list_for_export()` and `count_for_export()` DB functions
+- Database migration `011_federation.sql` — mirror and federation fields on repositories
+- `FederationConfig` section in config (`[federation]` with `enabled`, `instance_url`, `instance_name`, `timeout_secs`)
+
 #### Phase 6 — Web Interface (Complete)
 - Repository file browser with branch selector, breadcrumb navigation, file/folder icons
 - Code viewer with line numbers, anchor links, raw download, and blame view

@@ -11,6 +11,9 @@ pub struct Repository {
     pub visibility: Visibility,
     pub default_branch: String,
     pub forked_from: Option<Uuid>,
+    pub is_mirror: bool,
+    pub mirror_url: Option<String>,
+    pub federation_instance_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -44,6 +47,9 @@ impl Repository {
             visibility: Visibility::Private,
             default_branch: "main".into(),
             forked_from: None,
+            is_mirror: false,
+            mirror_url: None,
+            federation_instance_id: None,
             created_at: now,
             updated_at: now,
         }

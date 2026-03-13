@@ -203,6 +203,43 @@ pub async fn list_forks(pool: &SqlitePool, parent_repo_id: &str) -> Result<Vec<R
     Ok(rows.into_iter().map(|r| r.into_repo()).collect())
 }
 
+/// Create a mirror repository record.
+pub async fn create_mirror(
+    pool: &SqlitePool,
+    owner_id: &str,
+    name: &str,
+    description: Option<&str>,
+    mirror_url: &str,
+    federation_instance_id: Option<&str>,
+) -> Result<Repository> {
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
+
+    sqlx::query(
+        "INSERT INTO repositories (id, owner_id, name, description, visibility, default_branch, is_mirror, mirror_url, federation_instance_id, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, 'private', 'main', TRUE, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(owner_id)
+    .bind(name)
+    .bind(description)
+    .bind(mirror_url)
+    .bind(federation_instance_id)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        if e.to_string().contains("UNIQUE") {
+            DeltaError::Conflict(format!("repository '{}' already exists", name))
+        } else {
+            DeltaError::Storage(e.to_string())
+        }
+    })?;
+
+    get_by_id(pool, &id).await
+}
+
 /// Delete a repository.
 pub async fn delete(pool: &SqlitePool, id: &str) -> Result<()> {
     let result = sqlx::query("DELETE FROM repositories WHERE id = ?")
@@ -226,6 +263,9 @@ struct RepoRow {
     visibility: String,
     default_branch: String,
     forked_from: Option<String>,
+    is_mirror: bool,
+    mirror_url: Option<String>,
+    federation_instance_id: Option<String>,
     created_at: String,
     updated_at: String,
 }
@@ -244,6 +284,9 @@ impl RepoRow {
             },
             default_branch: self.default_branch,
             forked_from: self.forked_from.and_then(|s| s.parse().ok()),
+            is_mirror: self.is_mirror,
+            mirror_url: self.mirror_url,
+            federation_instance_id: self.federation_instance_id,
             created_at: self.created_at.parse().unwrap_or_default(),
             updated_at: self.updated_at.parse().unwrap_or_default(),
         }

@@ -21,6 +21,9 @@ async fn setup_pool() -> sqlx::SqlitePool {
         include_str!("../migrations/007_forks_and_templates.sql"),
         include_str!("../migrations/008_lfs.sql"),
         include_str!("../migrations/009_cascade_fixes.sql"),
+        include_str!("../migrations/010_search.sql"),
+        include_str!("../migrations/011_federation.sql"),
+        include_str!("../migrations/012_encryption.sql"),
     ] {
         sqlx::query(migration)
             .execute(&pool)

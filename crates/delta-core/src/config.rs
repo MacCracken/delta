@@ -18,6 +18,8 @@ pub struct DeltaConfig {
     pub ai: AiConfig,
     #[serde(default)]
     pub agnos: AgnosConfig,
+    #[serde(default)]
+    pub federation: FederationConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,6 +159,26 @@ fn default_daimon_url() -> String {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FederationConfig {
+    /// Enable federation with other Delta instances.
+    #[serde(default)]
+    pub enabled: bool,
+    /// This instance's public URL (used in federation handshakes).
+    #[serde(default)]
+    pub instance_url: Option<String>,
+    /// Human-readable instance name.
+    #[serde(default)]
+    pub instance_name: Option<String>,
+    /// Timeout for federation HTTP requests in seconds.
+    #[serde(default = "default_federation_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_federation_timeout() -> u64 {
+    30
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AiConfig {
     /// Enable AI-powered features (code review, PR summaries, etc.)
     #[serde(default)]
@@ -207,7 +229,7 @@ impl Default for DeltaConfig {
             storage: StorageConfig {
                 repos_dir: PathBuf::from("/var/lib/delta/repos"),
                 artifacts_dir: PathBuf::from("/var/lib/delta/artifacts"),
-                db_url: "sqlite:///var/lib/delta/delta.db".into(),
+                db_url: "sqlite:///var/lib/delta/delta.db?mode=rwc".into(),
                 lfs_dir: None,
             },
             auth: AuthConfig {
@@ -221,6 +243,7 @@ impl Default for DeltaConfig {
             ci: CiConfig::default(),
             ai: AiConfig::default(),
             agnos: AgnosConfig::default(),
+            federation: FederationConfig::default(),
         }
     }
 }

@@ -1,0 +1,24 @@
+# Delta — Private Instance Configuration
+# Minimal config for self-hosted private use.
+# Run with: delta -c config/delta.private.toml
+
+[server]
+host = "127.0.0.1"
+port = 8070
+api_prefix = "/api/v1"
+
+[storage]
+repos_dir = "./data/repos"
+artifacts_dir = "./data/artifacts"
+db_url = "sqlite://./data/delta.db?mode=rwc"
+
+[auth]
+enabled = true
+token_expiry_secs = 604800  # 7 days
+secrets_key = "change-this-to-a-random-string"
+
+[federation]
+enabled = false
+
+[ai]
+enabled = false

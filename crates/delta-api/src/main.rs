@@ -20,6 +20,14 @@ struct Cli {
     /// Emit structured JSON logs (AGNOS journald compatible)
     #[arg(long, default_value_t = false)]
     json_log: bool,
+
+    /// Run as a private instance (no public repos, strict defaults)
+    #[arg(long)]
+    private: bool,
+
+    /// Data directory for repos, artifacts, and database
+    #[arg(long)]
+    data_dir: Option<String>,
 }
 
 #[tokio::main]
@@ -51,6 +59,21 @@ async fn main() -> anyhow::Result<()> {
         config.server.port = port;
     }
 
+    if cli.private {
+        config.auth.enabled = true;
+        config.federation.enabled = false;
+        config.server.cors_origins = vec![];
+        tracing::info!("running in private instance mode");
+    }
+
+    if let Some(ref dir) = cli.data_dir {
+        let data = std::path::PathBuf::from(dir);
+        config.storage.repos_dir = data.join("repos");
+        config.storage.artifacts_dir = data.join("artifacts");
+        config.storage.db_url =
+            format!("sqlite://{}?mode=rwc", data.join("delta.db").display());
+    }
+
     if config.auth.secrets_key == "delta-change-me-in-production"
         || config.auth.secrets_key == "change-me-to-a-strong-random-passphrase"
     {
@@ -59,6 +82,11 @@ async fn main() -> anyhow::Result<()> {
              Set auth.secrets_key in your config file."
         );
     }
+
+    // Ensure storage directories exist
+    std::fs::create_dir_all(&config.storage.repos_dir)?;
+    std::fs::create_dir_all(&config.storage.artifacts_dir)?;
+    std::fs::create_dir_all(config.storage.lfs_dir())?;
 
     let pool = db::init_pool(&config.storage.db_url).await?;
 

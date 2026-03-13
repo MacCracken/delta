@@ -2,15 +2,7 @@
 
 Delta is a code hosting platform providing version control, CI/CD, and artifact registry — built for the AGNOS ecosystem.
 
-Phases 1–7 and AGNOS integration are complete. Only remaining work is listed below.
-
-## Phase 8 — Federation and Privacy
-
-- [ ] Instance-to-instance federation protocol
-- [ ] Cross-instance forking and mirroring
-- [ ] Private instance deployment (single binary, minimal config)
-- [ ] End-to-end encrypted repositories
-- [ ] Audit log export for compliance
+Phases 1–8 and AGNOS integration are complete. Only remaining work is listed below.
 
 ## Phase 9 — Scale and Hardening
 

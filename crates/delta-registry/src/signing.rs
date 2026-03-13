@@ -41,8 +41,10 @@ pub fn verify_signature(
 }
 
 /// Sign a content hash with an ed25519 private key.
+///
 /// - `signing_key_hex`: 32-byte ed25519 private key seed as hex (64 chars)
 /// - `message`: the content hash string to sign
+///
 /// Returns the signature as hex (128 chars = 64 bytes).
 pub fn sign_content(signing_key_hex: &str, message: &str) -> Result<String, String> {
     let sk_bytes =

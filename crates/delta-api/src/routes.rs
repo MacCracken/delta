@@ -5,6 +5,7 @@ pub mod audit;
 pub mod auth;
 pub mod badges;
 pub mod branches;
+pub mod federation;
 pub mod collaborators;
 pub mod forks;
 pub mod git;
@@ -70,6 +71,7 @@ pub fn router(state: AppState) -> Router {
         .nest("/api/v1/user/ssh-keys", ssh_keys::router())
         .nest("/api/v1/registry", ark::router())
         .nest("/api/v1/audit", audit::router())
+        .nest("/api/v1/federation", federation::router())
         // OCI Distribution Spec — /v2/ routes
         .merge(oci::router())
         // Git LFS — /{owner}/{name}.git/info/lfs/...

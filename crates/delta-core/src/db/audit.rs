@@ -124,3 +124,92 @@ struct AuditRow {
     ip_address: Option<String>,
     created_at: String,
 }
+
+impl AuditRow {
+    fn into_entry(self) -> AuditEntry {
+        AuditEntry {
+            id: self.id,
+            user_id: self.user_id,
+            action: self.action,
+            resource_type: self.resource_type,
+            resource_id: self.resource_id,
+            details: self.details,
+            ip_address: self.ip_address,
+            created_at: self.created_at,
+        }
+    }
+}
+
+/// List audit entries filtered by date range for compliance export.
+pub async fn list_for_export(
+    pool: &SqlitePool,
+    since: Option<&str>,
+    until: Option<&str>,
+    resource_type: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<AuditEntry>> {
+    let mut sql = String::from("SELECT * FROM audit_log WHERE 1=1");
+    let mut binds: Vec<String> = Vec::new();
+
+    if let Some(s) = since {
+        sql.push_str(" AND created_at >= ?");
+        binds.push(s.to_string());
+    }
+    if let Some(u) = until {
+        sql.push_str(" AND created_at <= ?");
+        binds.push(u.to_string());
+    }
+    if let Some(rt) = resource_type {
+        sql.push_str(" AND resource_type = ?");
+        binds.push(rt.to_string());
+    }
+    sql.push_str(" ORDER BY created_at ASC LIMIT ? OFFSET ?");
+
+    let mut query = sqlx::query_as::<_, AuditRow>(&sql);
+    for b in &binds {
+        query = query.bind(b);
+    }
+    query = query.bind(limit).bind(offset);
+
+    let rows = query
+        .fetch_all(pool)
+        .await
+        .map_err(|e| DeltaError::Storage(e.to_string()))?;
+
+    Ok(rows.into_iter().map(|r| r.into_entry()).collect())
+}
+
+/// Count audit entries matching export filters (for pagination).
+pub async fn count_for_export(
+    pool: &SqlitePool,
+    since: Option<&str>,
+    until: Option<&str>,
+    resource_type: Option<&str>,
+) -> Result<i64> {
+    let mut sql = String::from("SELECT COUNT(*) as count FROM audit_log WHERE 1=1");
+    let mut binds: Vec<String> = Vec::new();
+
+    if let Some(s) = since {
+        sql.push_str(" AND created_at >= ?");
+        binds.push(s.to_string());
+    }
+    if let Some(u) = until {
+        sql.push_str(" AND created_at <= ?");
+        binds.push(u.to_string());
+    }
+    if let Some(rt) = resource_type {
+        sql.push_str(" AND resource_type = ?");
+        binds.push(rt.to_string());
+    }
+
+    let mut query = sqlx::query_scalar::<_, i64>(&sql);
+    for b in &binds {
+        query = query.bind(b);
+    }
+
+    query
+        .fetch_one(pool)
+        .await
+        .map_err(|e| DeltaError::Storage(e.to_string()))
+}

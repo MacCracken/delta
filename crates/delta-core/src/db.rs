@@ -4,6 +4,8 @@ pub mod audit;
 pub mod branch_protection;
 pub mod collaborator;
 pub mod download_stats;
+pub mod encryption;
+pub mod federation;
 pub mod lfs;
 pub mod oci;
 pub mod pipeline;
@@ -55,6 +57,8 @@ pub async fn init_pool(db_url: &str) -> Result<SqlitePool> {
         include_str!("../migrations/008_lfs.sql"),
         include_str!("../migrations/009_cascade_fixes.sql"),
         include_str!("../migrations/010_search.sql"),
+        include_str!("../migrations/011_federation.sql"),
+        include_str!("../migrations/012_encryption.sql"),
     ] {
         sqlx::query(migration)
             .execute(&pool)

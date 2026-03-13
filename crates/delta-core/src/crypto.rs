@@ -66,6 +66,26 @@ fn xor_stream(key: &[u8; 32], nonce: &[u8; 16], data: &[u8]) -> Vec<u8> {
     result
 }
 
+/// Generate a random 32-byte key and return it as hex.
+pub fn generate_repo_key() -> String {
+    let mut key = [0u8; 32];
+    getrandom::fill(&mut key).expect("failed to generate random key");
+    hex::encode(key)
+}
+
+/// Encrypt a repository encryption key for a specific user.
+/// Uses the user's derived key (from their token/password) to wrap the repo key.
+/// Returns hex-encoded ciphertext.
+pub fn wrap_repo_key(user_key: &[u8; 32], repo_key_hex: &str) -> String {
+    encrypt(user_key, repo_key_hex.as_bytes())
+}
+
+/// Decrypt a wrapped repository encryption key.
+/// Returns the repo key as hex string.
+pub fn unwrap_repo_key(user_key: &[u8; 32], wrapped_hex: &str) -> crate::Result<String> {
+    decrypt(user_key, wrapped_hex)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -14,6 +14,9 @@ pub enum DeltaError {
     #[error("invalid reference: {0}")]
     InvalidRef(String),
 
+    #[error("not found: {0}")]
+    NotFound(String),
+
     #[error("conflict: {0}")]
     Conflict(String),
 
