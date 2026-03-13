@@ -135,4 +135,37 @@ mod tests {
         let decrypted = decrypt(&key, &encrypted).unwrap();
         assert_eq!(decrypted, plaintext);
     }
+
+    #[test]
+    fn test_generate_repo_key() {
+        let key = generate_repo_key();
+        assert_eq!(key.len(), 64); // 32 bytes as hex
+        assert!(key.chars().all(|c| c.is_ascii_hexdigit()));
+
+        let key2 = generate_repo_key();
+        assert_ne!(key, key2);
+    }
+
+    #[test]
+    fn test_wrap_unwrap_repo_key() {
+        let user_key = derive_key("user-password");
+        let repo_key = generate_repo_key();
+
+        let wrapped = wrap_repo_key(&user_key, &repo_key);
+        assert_ne!(wrapped, repo_key);
+
+        let unwrapped = unwrap_repo_key(&user_key, &wrapped).unwrap();
+        assert_eq!(unwrapped, repo_key);
+    }
+
+    #[test]
+    fn test_wrap_wrong_key_fails() {
+        let key1 = derive_key("user1");
+        let key2 = derive_key("user2");
+        let repo_key = generate_repo_key();
+
+        let wrapped = wrap_repo_key(&key1, &repo_key);
+        let unwrapped = unwrap_repo_key(&key2, &wrapped).unwrap_or_default();
+        assert_ne!(unwrapped, repo_key);
+    }
 }

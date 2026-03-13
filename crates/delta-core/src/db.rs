@@ -20,6 +20,7 @@ pub mod ssh_key;
 pub mod status_check;
 pub mod user;
 pub mod webhook;
+pub mod workspace;
 
 use crate::Result;
 use sqlx::SqlitePool;
@@ -66,6 +67,7 @@ pub async fn init_pool_sized(db_url: &str, max_connections: u32) -> Result<Sqlit
         include_str!("../migrations/010_search.sql"),
         include_str!("../migrations/011_federation.sql"),
         include_str!("../migrations/012_encryption.sql"),
+        include_str!("../migrations/013_workspaces.sql"),
     ] {
         sqlx::query(migration)
             .execute(&pool)

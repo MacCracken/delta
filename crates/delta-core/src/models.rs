@@ -6,6 +6,8 @@ pub mod repo;
 pub mod ssh_key;
 pub mod user;
 pub mod webhook;
+pub mod workspace;
 
 pub use repo::Repository;
 pub use user::User;
+pub use workspace::Workspace;

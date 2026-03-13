@@ -1,4 +1,5 @@
 use crate::middleware::{Metrics, RateLimiter};
+use crate::routes::workspaces::WorkspaceLocks;
 use delta_ci::PipelineStreams;
 use delta_core::DeltaConfig;
 use delta_registry::{BlobStore, LfsStore};
@@ -18,6 +19,7 @@ pub struct AppState {
     pub rate_limiter: Option<RateLimiter>,
     pub auth_rate_limiter: Option<RateLimiter>,
     pub metrics: Metrics,
+    pub workspace_locks: WorkspaceLocks,
 }
 
 impl AppState {
@@ -51,6 +53,7 @@ impl AppState {
             rate_limiter,
             auth_rate_limiter,
             metrics: Metrics::new(),
+            workspace_locks: crate::routes::workspaces::new_workspace_locks(),
         }
     }
 }

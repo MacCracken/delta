@@ -1,34 +1,10 @@
+//! Tests for pull requests, comments, reviews, and status checks.
+
+mod common;
+
 use delta_core::db;
 use delta_core::models::pull_request::*;
 use delta_core::models::repo::Visibility;
-
-async fn setup_pool() -> sqlx::SqlitePool {
-    let pool = sqlx::SqlitePool::connect("sqlite::memory:")
-        .await
-        .expect("failed to connect");
-
-    for migration in [
-        include_str!("../migrations/001_initial.sql"),
-        include_str!("../migrations/002_git_protocol.sql"),
-        include_str!("../migrations/003_pull_requests.sql"),
-        include_str!("../migrations/004_cicd.sql"),
-        include_str!("../migrations/005_registry.sql"),
-        include_str!("../migrations/006_collaborators.sql"),
-        include_str!("../migrations/007_forks_and_templates.sql"),
-        include_str!("../migrations/008_lfs.sql"),
-        include_str!("../migrations/009_cascade_fixes.sql"),
-        include_str!("../migrations/010_search.sql"),
-        include_str!("../migrations/011_federation.sql"),
-        include_str!("../migrations/012_encryption.sql"),
-    ] {
-        sqlx::query(migration)
-            .execute(&pool)
-            .await
-            .expect("migration failed");
-    }
-
-    pool
-}
 
 struct TestFixture {
     pool: sqlx::SqlitePool,
@@ -38,7 +14,7 @@ struct TestFixture {
 }
 
 async fn setup_fixture() -> TestFixture {
-    let pool = setup_pool().await;
+    let pool = common::setup_pool().await;
     let user = db::user::create(&pool, "alice", "alice@example.com", "pw", false)
         .await
         .unwrap();
@@ -136,19 +112,16 @@ async fn test_list_prs_with_filter() {
     let f = setup_fixture().await;
     let pr = create_test_pr(&f).await;
 
-    // All
     let all = db::pull_request::list_for_repo(&f.pool, &f.repo_id, None)
         .await
         .unwrap();
     assert_eq!(all.len(), 1);
 
-    // Open
     let open = db::pull_request::list_for_repo(&f.pool, &f.repo_id, Some("open"))
         .await
         .unwrap();
     assert_eq!(open.len(), 1);
 
-    // Close it
     db::pull_request::close(&f.pool, &pr.id.to_string())
         .await
         .unwrap();
@@ -222,7 +195,6 @@ async fn test_pr_comments() {
     let pr = create_test_pr(&f).await;
     let pr_id = pr.id.to_string();
 
-    // General comment
     let c1 =
         db::pull_request::add_comment(&f.pool, &pr_id, &f.user_id, "Looks good!", None, None, None)
             .await
@@ -230,7 +202,6 @@ async fn test_pr_comments() {
     assert_eq!(c1.body, "Looks good!");
     assert!(c1.file_path.is_none());
 
-    // Inline comment
     let c2 = db::pull_request::add_comment(
         &f.pool,
         &pr_id,
@@ -245,19 +216,16 @@ async fn test_pr_comments() {
     assert_eq!(c2.file_path.as_deref(), Some("src/lib.rs"));
     assert_eq!(c2.line, Some(42));
 
-    // List
     let comments = db::pull_request::list_comments(&f.pool, &pr_id)
         .await
         .unwrap();
     assert_eq!(comments.len(), 2);
 
-    // Update
     let updated = db::pull_request::update_comment(&f.pool, &c1.id.to_string(), "LGTM!")
         .await
         .unwrap();
     assert_eq!(updated.body, "LGTM!");
 
-    // Delete
     db::pull_request::delete_comment(&f.pool, &c2.id.to_string())
         .await
         .unwrap();
@@ -275,7 +243,6 @@ async fn test_pr_reviews() {
     let pr = create_test_pr(&f).await;
     let pr_id = pr.id.to_string();
 
-    // Submit review
     let review = db::pull_request::submit_review(
         &f.pool,
         &pr_id,
@@ -287,13 +254,11 @@ async fn test_pr_reviews() {
     .unwrap();
     assert_eq!(review.state, ReviewState::ChangesRequested);
 
-    // List
     let reviews = db::pull_request::list_reviews(&f.pool, &pr_id)
         .await
         .unwrap();
     assert_eq!(reviews.len(), 1);
 
-    // Approve
     db::pull_request::submit_review(&f.pool, &pr_id, &f.reviewer_id, ReviewState::Approved, None)
         .await
         .unwrap();
@@ -310,13 +275,11 @@ async fn test_count_approvals() {
     let pr = create_test_pr(&f).await;
     let pr_id = pr.id.to_string();
 
-    // No approvals yet
     let count = db::pull_request::count_approvals(&f.pool, &pr_id)
         .await
         .unwrap();
     assert_eq!(count, 0);
 
-    // Add approval
     db::pull_request::submit_review(&f.pool, &pr_id, &f.reviewer_id, ReviewState::Approved, None)
         .await
         .unwrap();
@@ -333,7 +296,6 @@ async fn test_count_approvals() {
 async fn test_status_checks() {
     let f = setup_fixture().await;
 
-    // Create a pending check
     let check = db::status_check::upsert(
         &f.pool,
         &f.repo_id,
@@ -348,13 +310,11 @@ async fn test_status_checks() {
     assert_eq!(check.state, CheckState::Pending);
     assert_eq!(check.context, "ci/tests");
 
-    // Not all passed
     let passed = db::status_check::all_passed(&f.pool, &f.repo_id, "abc123")
         .await
         .unwrap();
     assert!(!passed);
 
-    // Update to success
     db::status_check::upsert(
         &f.pool,
         &f.repo_id,
@@ -372,7 +332,6 @@ async fn test_status_checks() {
         .unwrap();
     assert!(passed);
 
-    // Add a failing check
     db::status_check::upsert(
         &f.pool,
         &f.repo_id,
@@ -390,7 +349,6 @@ async fn test_status_checks() {
         .unwrap();
     assert!(!passed);
 
-    // List checks
     let checks = db::status_check::get_for_commit(&f.pool, &f.repo_id, "abc123")
         .await
         .unwrap();
@@ -405,4 +363,149 @@ async fn test_no_checks_means_passed() {
         .await
         .unwrap();
     assert!(passed);
+}
+
+#[tokio::test]
+async fn test_status_check_upsert_and_get() {
+    let pool = common::setup_pool().await;
+    let user = common::create_test_user(&pool).await;
+    let repo = common::create_test_repo(&pool, &user.id.to_string()).await;
+    let repo_id = repo.id.to_string();
+    let sha = "abc123def456";
+
+    let check = db::status_check::upsert(
+        &pool,
+        &repo_id,
+        sha,
+        "ci/build",
+        CheckState::Pending,
+        Some("Build started"),
+        Some("https://ci.example.com/1"),
+    )
+    .await
+    .expect("failed to upsert");
+
+    assert_eq!(check.context, "ci/build");
+    assert_eq!(check.state, CheckState::Pending);
+
+    let updated = db::status_check::upsert(
+        &pool,
+        &repo_id,
+        sha,
+        "ci/build",
+        CheckState::Success,
+        Some("Build passed"),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(updated.state, CheckState::Success);
+
+    let checks = db::status_check::get_for_commit(&pool, &repo_id, sha)
+        .await
+        .unwrap();
+    assert_eq!(checks.len(), 1);
+}
+
+#[tokio::test]
+async fn test_status_check_all_passed() {
+    let pool = common::setup_pool().await;
+    let user = common::create_test_user(&pool).await;
+    let repo = common::create_test_repo(&pool, &user.id.to_string()).await;
+    let repo_id = repo.id.to_string();
+    let sha = "commit123";
+
+    assert!(
+        db::status_check::all_passed(&pool, &repo_id, sha)
+            .await
+            .unwrap()
+    );
+
+    db::status_check::upsert(
+        &pool,
+        &repo_id,
+        sha,
+        "ci/build",
+        CheckState::Success,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        db::status_check::all_passed(&pool, &repo_id, sha)
+            .await
+            .unwrap()
+    );
+
+    db::status_check::upsert(
+        &pool,
+        &repo_id,
+        sha,
+        "ci/lint",
+        CheckState::Failure,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        !db::status_check::all_passed(&pool, &repo_id, sha)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn test_status_check_multiple_contexts() {
+    let pool = common::setup_pool().await;
+    let user = common::create_test_user(&pool).await;
+    let repo = common::create_test_repo(&pool, &user.id.to_string()).await;
+    let repo_id = repo.id.to_string();
+    let sha = "commit456";
+
+    db::status_check::upsert(
+        &pool,
+        &repo_id,
+        sha,
+        "ci/build",
+        CheckState::Success,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    db::status_check::upsert(
+        &pool,
+        &repo_id,
+        sha,
+        "ci/test",
+        CheckState::Pending,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    db::status_check::upsert(
+        &pool,
+        &repo_id,
+        sha,
+        "ci/lint",
+        CheckState::Error,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let checks = db::status_check::get_for_commit(&pool, &repo_id, sha)
+        .await
+        .unwrap();
+    assert_eq!(checks.len(), 3);
+
+    assert!(
+        !db::status_check::all_passed(&pool, &repo_id, sha)
+            .await
+            .unwrap()
+    );
 }

@@ -91,6 +91,19 @@ async fn main() -> anyhow::Result<()> {
 
     let state = AppState::new(config.clone(), pool);
 
+    // Spawn workspace TTL cleanup task
+    {
+        let cleanup_db = state.db.clone();
+        let cleanup_repo_host = state.repo_host.clone();
+        tokio::spawn(async move {
+            delta_api::routes::workspaces::cleanup_expired_workspaces(
+                cleanup_db,
+                cleanup_repo_host,
+            )
+            .await;
+        });
+    }
+
     // Clone rate limiters for the background cleanup task before state is consumed.
     let cleanup_limiter = state.rate_limiter.clone();
     let cleanup_auth_limiter = state.auth_rate_limiter.clone();

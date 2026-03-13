@@ -22,6 +22,7 @@ pub mod ssh_keys;
 pub mod status_checks;
 pub mod web;
 pub mod webhooks;
+pub mod workspaces;
 
 use crate::middleware::metrics_and_rate_limit;
 use crate::state::AppState;
@@ -69,6 +70,7 @@ pub fn router(state: AppState) -> Router {
         .nest("/api/v1/repos", badges::router())
         .nest("/api/v1/repos", ai::router())
         .nest("/api/v1/repos", forks::router())
+        .nest("/api/v1/repos", workspaces::router())
         .nest("/api/v1/auth", signing::router())
         .nest("/api/v1/user/ssh-keys", ssh_keys::router())
         .nest("/api/v1/registry", ark::router())
