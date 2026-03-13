@@ -14,6 +14,8 @@ pub struct DeltaConfig {
     pub ssh: SshConfig,
     #[serde(default)]
     pub ci: CiConfig,
+    #[serde(default)]
+    pub ai: AiConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,6 +140,41 @@ fn default_secrets_key() -> String {
     "delta-change-me-in-production".into()
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AiConfig {
+    /// Enable AI-powered features (code review, PR summaries, etc.)
+    #[serde(default)]
+    pub enabled: bool,
+    /// LLM provider configuration
+    #[serde(default)]
+    pub provider: AiProvider,
+    /// API key for the LLM provider
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Model name to use (e.g. "claude-sonnet-4-20250514")
+    #[serde(default = "default_model")]
+    pub model: String,
+    /// Maximum tokens in LLM response
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AiProvider {
+    #[default]
+    Anthropic,
+    OpenAI,
+}
+
+fn default_model() -> String {
+    "claude-sonnet-4-20250514".into()
+}
+
+fn default_max_tokens() -> u32 {
+    4096
+}
+
 impl Default for DeltaConfig {
     fn default() -> Self {
         Self {
@@ -162,6 +199,7 @@ impl Default for DeltaConfig {
             webhooks: WebhookConfig::default(),
             ssh: SshConfig::default(),
             ci: CiConfig::default(),
+            ai: AiConfig::default(),
         }
     }
 }

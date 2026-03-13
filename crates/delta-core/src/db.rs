@@ -11,6 +11,7 @@ pub mod pull_request;
 pub mod release;
 pub mod repo;
 pub mod retention;
+pub mod search;
 pub mod secret;
 pub mod signing;
 pub mod ssh_key;
@@ -53,6 +54,7 @@ pub async fn init_pool(db_url: &str) -> Result<SqlitePool> {
         include_str!("../migrations/007_forks_and_templates.sql"),
         include_str!("../migrations/008_lfs.sql"),
         include_str!("../migrations/009_cascade_fixes.sql"),
+        include_str!("../migrations/010_search.sql"),
     ] {
         sqlx::query(migration)
             .execute(&pool)

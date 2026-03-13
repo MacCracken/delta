@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod ark;
 pub mod artifacts;
 pub mod audit;
@@ -62,6 +63,7 @@ pub fn router(state: AppState) -> Router {
         .nest("/api/v1/repos", pipelines::router())
         .nest("/api/v1/repos", artifacts::router())
         .nest("/api/v1/repos", badges::router())
+        .nest("/api/v1/repos", ai::router())
         .nest("/api/v1/repos", forks::router())
         .nest("/api/v1/auth", signing::router())
         .nest("/api/v1/user/ssh-keys", ssh_keys::router())

@@ -55,6 +55,8 @@ struct PrResponse {
     body: Option<String>,
     state: String,
     author: String,
+    /// True if the PR was authored by an AI agent (provenance tracking).
+    is_agent_authored: bool,
     head_branch: String,
     base_branch: String,
     head_sha: Option<String>,
@@ -69,10 +71,12 @@ struct PrResponse {
 
 impl PrResponse {
     async fn from_pr(pr: PullRequest, pool: &sqlx::SqlitePool) -> Self {
-        let author = db::user::get_by_id(pool, &pr.author_id.to_string())
-            .await
-            .map(|u| u.username)
+        let author_user = db::user::get_by_id(pool, &pr.author_id.to_string()).await;
+        let author = author_user
+            .as_ref()
+            .map(|u| u.username.clone())
             .unwrap_or_else(|_| pr.author_id.to_string());
+        let is_agent_authored = author_user.map(|u| u.is_agent).unwrap_or(false);
 
         let merged_by = if let Some(id) = &pr.merged_by {
             db::user::get_by_id(pool, &id.to_string())
@@ -94,6 +98,7 @@ impl PrResponse {
             body: pr.body,
             state: state_str,
             author,
+            is_agent_authored,
             head_branch: pr.head_branch,
             base_branch: pr.base_branch,
             head_sha: pr.head_sha,

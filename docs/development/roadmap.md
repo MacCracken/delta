@@ -2,7 +2,7 @@
 
 Delta is a code hosting platform providing version control, CI/CD, and artifact registry — built for the AGNOS ecosystem.
 
-Phases 1–5 are complete. Only remaining work is listed below.
+Phases 1–7 are complete. Only remaining work is listed below.
 
 ## Phase 2 — Git Protocol (Remaining)
 
@@ -13,11 +13,11 @@ Phases 1–5 are complete. Only remaining work is listed below.
 - [x] Repository forking and mirroring
 - [x] Webhook HTTPS-only enforcement (config flag)
 
-## Phase 3 — Code Review (Remaining)
+## Phase 3 — Code Review (Complete)
 
-- [ ] AI-assisted code review summaries
-- [ ] Agent-authored PRs with provenance tracking
-- [ ] Inline suggestions with one-click apply
+- [x] AI-assisted code review summaries
+- [x] Agent-authored PRs with provenance tracking
+- [x] Inline suggestions with one-click apply
 
 ## Phase 4 — CI/CD Engine (Complete)
 
@@ -45,13 +45,13 @@ Phases 1–5 are complete. Only remaining work is listed below.
 - [x] User/org profile pages
 - [x] Settings and administration panels
 
-## Phase 7 — AI-Native Features
+## Phase 7 — AI-Native Features (Complete)
 
-- [ ] Structured API responses optimized for LLM consumption
-- [ ] Agent-scoped API tokens with fine-grained permissions
-- [ ] Code search with semantic indexing
-- [ ] AI-generated PR descriptions and commit summaries
-- [ ] Natural language query interface for repos
+- [x] Structured API responses optimized for LLM consumption
+- [x] Agent-scoped API tokens with fine-grained permissions
+- [x] Code search with semantic indexing
+- [x] AI-generated PR descriptions and commit summaries
+- [x] Natural language query interface for repos
 
 ## Phase 8 — Federation and Privacy
 

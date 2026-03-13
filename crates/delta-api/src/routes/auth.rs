@@ -218,12 +218,8 @@ async fn create_token(
         ));
     }
     // Validate scopes
-    const VALID_SCOPES: &[&str] = &["*", "read", "write", "admin", "repo", "user"];
-    for scope in req.scopes.split(',') {
-        let s = scope.trim();
-        if !VALID_SCOPES.contains(&s) {
-            return Err((StatusCode::BAD_REQUEST, format!("invalid scope: {}", s)));
-        }
+    if let Err(e) = delta_core::scopes::ScopeSet::parse(&req.scopes) {
+        return Err((StatusCode::BAD_REQUEST, e.to_string()));
     }
 
     let (raw_token, token_hash) = auth::generate_token().map_err(|e| {
