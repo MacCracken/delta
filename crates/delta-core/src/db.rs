@@ -28,6 +28,11 @@ use std::str::FromStr;
 
 /// Initialize the database connection pool and run migrations.
 pub async fn init_pool(db_url: &str) -> Result<SqlitePool> {
+    init_pool_sized(db_url, 10).await
+}
+
+/// Initialize the database connection pool with a configurable pool size and run migrations.
+pub async fn init_pool_sized(db_url: &str, max_connections: u32) -> Result<SqlitePool> {
     let url = db_url.strip_prefix("sqlite://").unwrap_or(db_url);
 
     // Ensure parent directory exists
@@ -41,7 +46,9 @@ pub async fn init_pool(db_url: &str) -> Result<SqlitePool> {
         .map_err(|e| crate::DeltaError::Storage(e.to_string()))?
         .create_if_missing(true);
 
-    let pool = SqlitePool::connect_with(options)
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(max_connections)
+        .connect_with(options)
         .await
         .map_err(|e| crate::DeltaError::Storage(e.to_string()))?;
 
@@ -66,6 +73,6 @@ pub async fn init_pool(db_url: &str) -> Result<SqlitePool> {
             .map_err(|e| crate::DeltaError::Storage(e.to_string()))?;
     }
 
-    tracing::info!("database initialized");
+    tracing::info!("database initialized (pool_size={})", max_connections);
     Ok(pool)
 }

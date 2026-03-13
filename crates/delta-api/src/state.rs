@@ -1,3 +1,4 @@
+use crate::middleware::{Metrics, RateLimiter};
 use delta_ci::PipelineStreams;
 use delta_core::DeltaConfig;
 use delta_registry::{BlobStore, LfsStore};
@@ -14,6 +15,9 @@ pub struct AppState {
     pub lfs_store: Arc<LfsStore>,
     pub db: SqlitePool,
     pub pipeline_streams: PipelineStreams,
+    pub rate_limiter: Option<RateLimiter>,
+    pub auth_rate_limiter: Option<RateLimiter>,
+    pub metrics: Metrics,
 }
 
 impl AppState {
@@ -21,6 +25,22 @@ impl AppState {
         let repo_host = RepoHost::new(&config.storage.repos_dir);
         let blob_store = BlobStore::new(&config.storage.artifacts_dir);
         let lfs_store = LfsStore::new(config.storage.lfs_dir());
+
+        let (rate_limiter, auth_rate_limiter) = if config.rate_limit.enabled {
+            (
+                Some(RateLimiter::new(
+                    config.rate_limit.requests_per_window,
+                    config.rate_limit.window_secs,
+                )),
+                Some(RateLimiter::new(
+                    config.rate_limit.auth_requests_per_window,
+                    config.rate_limit.window_secs,
+                )),
+            )
+        } else {
+            (None, None)
+        };
+
         Self {
             config: Arc::new(config),
             repo_host: Arc::new(repo_host),
@@ -28,6 +48,9 @@ impl AppState {
             lfs_store: Arc::new(lfs_store),
             db,
             pipeline_streams: delta_ci::new_pipeline_streams(),
+            rate_limiter,
+            auth_rate_limiter,
+            metrics: Metrics::new(),
         }
     }
 }

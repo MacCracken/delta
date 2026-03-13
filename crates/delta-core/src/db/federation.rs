@@ -122,9 +122,7 @@ pub async fn update_trust(pool: &SqlitePool, id: &str, trusted: bool) -> Result<
         .map_err(|e| DeltaError::Storage(e.to_string()))?;
 
     if result.rows_affected() == 0 {
-        return Err(DeltaError::NotFound(
-            "federation instance not found".into(),
-        ));
+        return Err(DeltaError::NotFound("federation instance not found".into()));
     }
     Ok(())
 }
@@ -148,9 +146,7 @@ pub async fn delete_instance(pool: &SqlitePool, id: &str) -> Result<()> {
         .map_err(|e| DeltaError::Storage(e.to_string()))?;
 
     if result.rows_affected() == 0 {
-        return Err(DeltaError::NotFound(
-            "federation instance not found".into(),
-        ));
+        return Err(DeltaError::NotFound("federation instance not found".into()));
     }
     Ok(())
 }

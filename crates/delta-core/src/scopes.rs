@@ -110,35 +110,49 @@ impl ScopeSet {
         if self.has_all {
             return true;
         }
-        self.scopes.iter().any(|s| {
-            *s == required || Self::implies(*s, required)
-        })
+        self.scopes
+            .iter()
+            .any(|s| *s == required || Self::implies(*s, required))
     }
 
     /// Check if scope `a` implies scope `b` (write implies read).
     fn implies(a: Scope, b: Scope) -> bool {
-        matches!((a, b),
+        matches!(
+            (a, b),
             (Scope::RepoWrite, Scope::RepoRead)
-            | (Scope::PrWrite, Scope::PrRead)
-            | (Scope::CiWrite, Scope::CiRead)
-            | (Scope::RegistryWrite, Scope::RegistryRead)
-            | (Scope::Admin, Scope::RepoRead)
-            | (Scope::Admin, Scope::RepoWrite)
-            | (Scope::Admin, Scope::PrRead)
-            | (Scope::Admin, Scope::PrWrite)
-            | (Scope::Admin, Scope::CiRead)
-            | (Scope::Admin, Scope::CiWrite)
+                | (Scope::PrWrite, Scope::PrRead)
+                | (Scope::CiWrite, Scope::CiRead)
+                | (Scope::RegistryWrite, Scope::RegistryRead)
+                | (Scope::Admin, Scope::RepoRead)
+                | (Scope::Admin, Scope::RepoWrite)
+                | (Scope::Admin, Scope::PrRead)
+                | (Scope::Admin, Scope::PrWrite)
+                | (Scope::Admin, Scope::CiRead)
+                | (Scope::Admin, Scope::CiWrite)
         )
     }
 
     /// Return valid scope strings for documentation/validation.
     pub fn valid_scopes() -> &'static [&'static str] {
         &[
-            "*", "repo:read", "repo:write", "pr:read", "pr:write",
-            "ci:read", "ci:write", "registry:read", "registry:write",
-            "user:profile", "user:tokens", "admin", "ai",
+            "*",
+            "repo:read",
+            "repo:write",
+            "pr:read",
+            "pr:write",
+            "ci:read",
+            "ci:write",
+            "registry:read",
+            "registry:write",
+            "user:profile",
+            "user:tokens",
+            "admin",
+            "ai",
             // Legacy (still accepted)
-            "read", "write", "repo", "user",
+            "read",
+            "write",
+            "repo",
+            "user",
         ]
     }
 }

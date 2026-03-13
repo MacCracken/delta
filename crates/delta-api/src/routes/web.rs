@@ -62,10 +62,7 @@ fn render_template(tmpl: impl Template) -> Response {
 type WebResult = Result<Response, (StatusCode, String)>;
 
 fn internal_err(msg: &str) -> (StatusCode, String) {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        msg.to_string(),
-    )
+    (StatusCode::INTERNAL_SERVER_ERROR, msg.to_string())
 }
 
 fn not_found(msg: &str) -> (StatusCode, String) {
@@ -93,7 +90,12 @@ async fn resolve_repo_path(
 }
 
 /// Build path parts for breadcrumb navigation.
-fn build_path_parts(owner: &str, repo: &str, rev: &str, path: &str) -> Vec<delta_web::repo::PathPart> {
+fn build_path_parts(
+    owner: &str,
+    repo: &str,
+    rev: &str,
+    path: &str,
+) -> Vec<delta_web::repo::PathPart> {
     let mut parts = Vec::new();
     if path.is_empty() {
         return parts;
@@ -597,13 +599,12 @@ async fn pipeline_list(
         .await
         .map_err(|_| not_found("repository not found"))?;
 
-    let pipelines =
-        db::pipeline::list_pipelines(&state.db, &repo_record.id.to_string(), None, 50)
-            .await
-            .map_err(|e| {
-                tracing::error!("failed to list pipelines: {}", e);
-                internal_err("internal server error")
-            })?;
+    let pipelines = db::pipeline::list_pipelines(&state.db, &repo_record.id.to_string(), None, 50)
+        .await
+        .map_err(|e| {
+            tracing::error!("failed to list pipelines: {}", e);
+            internal_err("internal server error")
+        })?;
 
     let page = delta_web::pipelines::PipelineListPage {
         owner,
@@ -868,10 +869,7 @@ async fn pull_detail(
 // User Profile
 // ---------------------------------------------------------------------------
 
-async fn user_profile(
-    State(state): State<AppState>,
-    Path(username): Path<String>,
-) -> WebResult {
+async fn user_profile(State(state): State<AppState>, Path(username): Path<String>) -> WebResult {
     let user = db::user::get_by_username(&state.db, &username)
         .await
         .map_err(|_| not_found("user not found"))?;

@@ -65,11 +65,7 @@ pub async fn add_key(
     })
 }
 
-pub async fn get_key(
-    pool: &SqlitePool,
-    repo_id: &str,
-    user_id: &str,
-) -> Result<RepoEncryptionKey> {
+pub async fn get_key(pool: &SqlitePool, repo_id: &str, user_id: &str) -> Result<RepoEncryptionKey> {
     sqlx::query_as::<_, KeyRow>(
         "SELECT * FROM repo_encryption_keys WHERE repo_id = ? AND user_id = ?",
     )

@@ -20,6 +20,10 @@ pub struct DeltaConfig {
     pub agnos: AgnosConfig,
     #[serde(default)]
     pub federation: FederationConfig,
+    #[serde(default)]
+    pub rate_limit: RateLimitConfig,
+    #[serde(default)]
+    pub scaling: ScalingConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,6 +182,73 @@ fn default_federation_timeout() -> u64 {
     30
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitConfig {
+    /// Enable rate limiting.
+    #[serde(default = "default_rate_limit_enabled")]
+    pub enabled: bool,
+    /// Maximum requests per window per IP.
+    #[serde(default = "default_requests_per_window")]
+    pub requests_per_window: u32,
+    /// Window duration in seconds.
+    #[serde(default = "default_window_secs")]
+    pub window_secs: u64,
+    /// Maximum login attempts per window per IP.
+    #[serde(default = "default_auth_requests_per_window")]
+    pub auth_requests_per_window: u32,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            requests_per_window: 300,
+            window_secs: 60,
+            auth_requests_per_window: 10,
+        }
+    }
+}
+
+fn default_rate_limit_enabled() -> bool {
+    true
+}
+fn default_requests_per_window() -> u32 {
+    300
+}
+fn default_window_secs() -> u64 {
+    60
+}
+fn default_auth_requests_per_window() -> u32 {
+    10
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScalingConfig {
+    /// Database connection pool size.
+    #[serde(default = "default_pool_size")]
+    pub db_pool_size: u32,
+    /// Request timeout in seconds (0 = no timeout).
+    #[serde(default = "default_request_timeout")]
+    pub request_timeout_secs: u64,
+}
+
+impl Default for ScalingConfig {
+    fn default() -> Self {
+        Self {
+            db_pool_size: default_pool_size(),
+            request_timeout_secs: default_request_timeout(),
+        }
+    }
+}
+
+fn default_pool_size() -> u32 {
+    10
+}
+
+fn default_request_timeout() -> u64 {
+    30
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AiConfig {
     /// Enable AI-powered features (code review, PR summaries, etc.)
@@ -244,6 +315,8 @@ impl Default for DeltaConfig {
             ai: AiConfig::default(),
             agnos: AgnosConfig::default(),
             federation: FederationConfig::default(),
+            rate_limit: RateLimitConfig::default(),
+            scaling: ScalingConfig::default(),
         }
     }
 }

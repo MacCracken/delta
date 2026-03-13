@@ -74,9 +74,7 @@ pub struct CommitFileStat {
 /// An empty string is valid and means the repository root.
 fn validate_path(path: &str) -> Result<()> {
     if path.contains('\0') {
-        return Err(DeltaError::InvalidRef(
-            "path contains null bytes".into(),
-        ));
+        return Err(DeltaError::InvalidRef("path contains null bytes".into()));
     }
     if path.starts_with('/') {
         return Err(DeltaError::InvalidRef(
@@ -474,10 +472,7 @@ pub async fn show_commit(repo_path: &Path, sha: &str) -> Result<CommitDetail> {
     let committer_name = lines[4].to_string();
     let committer_email = lines[5].to_string();
     let committer_date = lines[6].to_string();
-    let parents: Vec<String> = lines[7]
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect();
+    let parents: Vec<String> = lines[7].split_whitespace().map(|s| s.to_string()).collect();
     let message = lines[8].to_string();
 
     // Body: everything between subject line and ---END--- marker.
@@ -492,7 +487,11 @@ pub async fn show_commit(repo_path: &Path, sha: &str) -> Result<CommitDetail> {
 
     // 2. Fetch numstat for file-level stats.
     let stat_output = Command::new("git")
-        .args(["diff", "--numstat", &format!("{}^..{}", commit_sha, commit_sha)])
+        .args([
+            "diff",
+            "--numstat",
+            &format!("{}^..{}", commit_sha, commit_sha),
+        ])
         .current_dir(repo_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -503,9 +502,7 @@ pub async fn show_commit(repo_path: &Path, sha: &str) -> Result<CommitDetail> {
     // For root commits (no parent), diff sha^..sha fails. Fall back to
     // diff-tree against empty tree.
     let stat_stdout = match stat_output {
-        Ok(ref o) if o.status.success() => {
-            String::from_utf8_lossy(&o.stdout).to_string()
-        }
+        Ok(ref o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
         _ => {
             // Root commit: diff against empty tree.
             let empty_tree = "4b825dc642cb6eb9a060e54bf899d15006c1b7a8";
@@ -516,9 +513,7 @@ pub async fn show_commit(repo_path: &Path, sha: &str) -> Result<CommitDetail> {
                 .stderr(Stdio::piped())
                 .output()
                 .await
-                .map_err(|e| {
-                    DeltaError::Storage(format!("failed to run git diff: {}", e))
-                })?;
+                .map_err(|e| DeltaError::Storage(format!("failed to run git diff: {}", e)))?;
             String::from_utf8_lossy(&fallback.stdout).to_string()
         }
     };
@@ -544,9 +539,7 @@ pub async fn show_commit(repo_path: &Path, sha: &str) -> Result<CommitDetail> {
         .await;
 
     let diff = match diff_output {
-        Ok(ref o) if o.status.success() => {
-            String::from_utf8_lossy(&o.stdout).to_string()
-        }
+        Ok(ref o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
         _ => {
             // Root commit fallback.
             let empty_tree = "4b825dc642cb6eb9a060e54bf899d15006c1b7a8";
@@ -557,9 +550,7 @@ pub async fn show_commit(repo_path: &Path, sha: &str) -> Result<CommitDetail> {
                 .stderr(Stdio::piped())
                 .output()
                 .await
-                .map_err(|e| {
-                    DeltaError::Storage(format!("failed to run git diff: {}", e))
-                })?;
+                .map_err(|e| DeltaError::Storage(format!("failed to run git diff: {}", e)))?;
             String::from_utf8_lossy(&fallback.stdout).to_string()
         }
     };

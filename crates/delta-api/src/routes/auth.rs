@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{FromRequest, State},
     http::StatusCode,
     routing::{get, post},
 };
@@ -43,8 +43,35 @@ struct UserResponse {
 
 async fn register(
     State(state): State<AppState>,
-    Json(req): Json<RegisterRequest>,
+    request: axum::extract::Request,
 ) -> Result<(StatusCode, Json<AuthResponse>), (StatusCode, String)> {
+    // Auth rate limit check
+    if let Some(ref limiter) = state.auth_rate_limiter {
+        let ip = request
+            .headers()
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(',').next())
+            .map(|s| s.trim().to_string())
+            .or_else(|| {
+                request
+                    .extensions()
+                    .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                    .map(|ci| ci.0.ip().to_string())
+            })
+            .unwrap_or_default();
+        if !ip.is_empty() && limiter.check(&ip).is_none() {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many registration attempts".into(),
+            ));
+        }
+    }
+
+    let Json(req): Json<RegisterRequest> = Json::from_request(request, &state)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
     // Validate username: 1-39 chars, alphanumeric and hyphens, no leading hyphen
     if req.username.is_empty()
         || req.username.len() > 39
@@ -147,8 +174,35 @@ struct LoginRequest {
 
 async fn login(
     State(state): State<AppState>,
-    Json(req): Json<LoginRequest>,
+    request: axum::extract::Request,
 ) -> Result<Json<AuthResponse>, (StatusCode, String)> {
+    // Auth rate limit check
+    if let Some(ref limiter) = state.auth_rate_limiter {
+        let ip = request
+            .headers()
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(',').next())
+            .map(|s| s.trim().to_string())
+            .or_else(|| {
+                request
+                    .extensions()
+                    .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                    .map(|ci| ci.0.ip().to_string())
+            })
+            .unwrap_or_default();
+        if !ip.is_empty() && limiter.check(&ip).is_none() {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many login attempts".into(),
+            ));
+        }
+    }
+
+    let Json(req): Json<LoginRequest> = Json::from_request(request, &state)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
     let (user, token) = auth::login(
         &state.db,
         &req.username,

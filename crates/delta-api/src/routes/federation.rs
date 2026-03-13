@@ -81,13 +81,15 @@ async fn list_instances(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
 ) -> Result<Json<Vec<db::federation::FederationInstance>>, (StatusCode, String)> {
-    let instances = db::federation::list_instances(&state.db).await.map_err(|e| {
-        tracing::error!("failed to list federation instances: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal server error".into(),
-        )
-    })?;
+    let instances = db::federation::list_instances(&state.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("failed to list federation instances: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
 
     Ok(Json(instances))
 }
@@ -239,7 +241,10 @@ async fn create_mirror(
         &state.db,
         &user_id,
         local_name,
-        Some(&format!("Mirror of {}/{} from {}", req.owner, req.name, instance.url)),
+        Some(&format!(
+            "Mirror of {}/{} from {}",
+            req.owner, req.name, instance.url
+        )),
         &remote_url,
         Some(&instance.id),
     )

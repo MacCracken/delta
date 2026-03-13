@@ -36,10 +36,7 @@ pub enum SandboxMode {
     #[cfg(target_os = "linux")]
     Landlock,
     /// Container-based execution.
-    Container {
-        runtime: String,
-        image: String,
-    },
+    Container { runtime: String, image: String },
     /// No sandboxing.
     None,
 }
@@ -78,7 +75,10 @@ pub async fn execute_job(
             });
         }
 
-        let result = run_step(&step_name, cmd, work_dir, env_vars, step_idx, job_id, sender, sandbox).await;
+        let result = run_step(
+            &step_name, cmd, work_dir, env_vars, step_idx, job_id, sender, sandbox,
+        )
+        .await;
 
         // Emit step completed event
         if let Some(tx) = sender

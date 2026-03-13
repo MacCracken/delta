@@ -1,6 +1,11 @@
 //! MCP server — exposes Delta API as MCP tools for agnoshi shell.
 
-use axum::{extract::State, http::StatusCode, routing::{get, post}, Json, Router};
+use axum::{
+    Json, Router,
+    extract::State,
+    http::StatusCode,
+    routing::{get, post},
+};
 use serde::{Deserialize, Serialize};
 
 use crate::state::AppState;
@@ -228,16 +233,31 @@ fn arg_str<'a>(args: &'a serde_json::Value, key: &str) -> Option<&'a str> {
     args.get(key).and_then(|v| v.as_str())
 }
 
-fn require_str<'a>(args: &'a serde_json::Value, key: &str) -> Result<&'a str, (StatusCode, Json<McpToolResult>)> {
-    arg_str(args, key)
-        .ok_or_else(|| error_result(StatusCode::BAD_REQUEST, &format!("missing required argument: {}", key)))
+fn require_str<'a>(
+    args: &'a serde_json::Value,
+    key: &str,
+) -> Result<&'a str, (StatusCode, Json<McpToolResult>)> {
+    arg_str(args, key).ok_or_else(|| {
+        error_result(
+            StatusCode::BAD_REQUEST,
+            &format!("missing required argument: {}", key),
+        )
+    })
 }
 
 /// Resolve an owner username to a user ID string.
-async fn resolve_owner(state: &AppState, owner: &str) -> Result<String, (StatusCode, Json<McpToolResult>)> {
+async fn resolve_owner(
+    state: &AppState,
+    owner: &str,
+) -> Result<String, (StatusCode, Json<McpToolResult>)> {
     let user = db::user::get_by_username(&state.db, owner)
         .await
-        .map_err(|_| error_result(StatusCode::NOT_FOUND, &format!("user '{}' not found", owner)))?;
+        .map_err(|_| {
+            error_result(
+                StatusCode::NOT_FOUND,
+                &format!("user '{}' not found", owner),
+            )
+        })?;
     Ok(user.id.to_string())
 }
 
@@ -250,7 +270,12 @@ async fn resolve_repo(
     let owner_id = resolve_owner(state, owner).await?;
     db::repo::get_by_owner_and_name(&state.db, &owner_id, name)
         .await
-        .map_err(|_| error_result(StatusCode::NOT_FOUND, &format!("repository '{}/{}' not found", owner, name)))
+        .map_err(|_| {
+            error_result(
+                StatusCode::NOT_FOUND,
+                &format!("repository '{}/{}' not found", owner, name),
+            )
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -284,7 +309,9 @@ async fn handle_list_branches(state: &AppState, args: &serde_json::Value) -> Too
     let name = require_str(args, "name")?;
     // Verify the repo exists in DB
     let _repo = resolve_repo(state, owner, name).await?;
-    let repo_path = state.repo_host.repo_path(owner, name)
+    let repo_path = state
+        .repo_host
+        .repo_path(owner, name)
         .map_err(|e| error_result(StatusCode::BAD_REQUEST, &e.to_string()))?;
     let branches = delta_vcs::refs::list_branches(&repo_path)
         .map_err(|e| error_result(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -306,9 +333,9 @@ async fn handle_list_pulls(state: &AppState, args: &serde_json::Value) -> ToolRe
 async fn handle_get_pull(state: &AppState, args: &serde_json::Value) -> ToolResult {
     let owner = require_str(args, "owner")?;
     let name = require_str(args, "name")?;
-    let number = args.get("number")
-        .and_then(|v| v.as_i64())
-        .ok_or_else(|| error_result(StatusCode::BAD_REQUEST, "missing required argument: number"))?;
+    let number = args.get("number").and_then(|v| v.as_i64()).ok_or_else(|| {
+        error_result(StatusCode::BAD_REQUEST, "missing required argument: number")
+    })?;
     let repo = resolve_repo(state, owner, name).await?;
     let repo_id = repo.id.to_string();
     let pr = db::pull_request::get_by_number(&state.db, &repo_id, number)
@@ -361,7 +388,9 @@ async fn handle_read_file(state: &AppState, args: &serde_json::Value) -> ToolRes
     let rev = arg_str(args, "ref").unwrap_or("HEAD");
     // Verify the repo exists
     let _repo = resolve_repo(state, owner, name).await?;
-    let repo_path = state.repo_host.repo_path(owner, name)
+    let repo_path = state
+        .repo_host
+        .repo_path(owner, name)
         .map_err(|e| error_result(StatusCode::BAD_REQUEST, &e.to_string()))?;
     let content = delta_vcs::browse::read_blob_text(&repo_path, rev, path)
         .await
@@ -376,7 +405,9 @@ async fn handle_list_tree(state: &AppState, args: &serde_json::Value) -> ToolRes
     let rev = arg_str(args, "ref").unwrap_or("HEAD");
     // Verify the repo exists
     let _repo = resolve_repo(state, owner, name).await?;
-    let repo_path = state.repo_host.repo_path(owner, name)
+    let repo_path = state
+        .repo_host
+        .repo_path(owner, name)
         .map_err(|e| error_result(StatusCode::BAD_REQUEST, &e.to_string()))?;
     let entries = delta_vcs::browse::list_tree(&repo_path, rev, path)
         .await

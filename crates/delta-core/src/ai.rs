@@ -39,16 +39,12 @@ impl AiClient {
         }
         // Hoosh (local gateway) does not require an API key
         if config.api_key.is_none() && !matches!(config.provider, AiProvider::Hoosh) {
-            return Err(DeltaError::Storage(
-                "AI API key is not configured".into(),
-            ));
+            return Err(DeltaError::Storage("AI API key is not configured".into()));
         }
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .build()
-            .map_err(|e| {
-                DeltaError::Storage(format!("failed to create HTTP client: {}", e))
-            })?;
+            .map_err(|e| DeltaError::Storage(format!("failed to create HTTP client: {}", e)))?;
         Ok(Self {
             config: config.clone(),
             http,
@@ -57,16 +53,11 @@ impl AiClient {
 
     /// Check if AI features are available.
     pub fn is_available(config: &AiConfig) -> bool {
-        config.enabled
-            && (config.api_key.is_some() || matches!(config.provider, AiProvider::Hoosh))
+        config.enabled && (config.api_key.is_some() || matches!(config.provider, AiProvider::Hoosh))
     }
 
     /// Send messages to the LLM and get a response.
-    pub async fn complete(
-        &self,
-        system: &str,
-        messages: &[Message],
-    ) -> Result<AiResponse> {
+    pub async fn complete(&self, system: &str, messages: &[Message]) -> Result<AiResponse> {
         match self.config.provider {
             AiProvider::Anthropic => self.complete_anthropic(system, messages).await,
             AiProvider::OpenAI => self.complete_openai(system, messages).await,
@@ -74,11 +65,7 @@ impl AiClient {
         }
     }
 
-    async fn complete_anthropic(
-        &self,
-        system: &str,
-        messages: &[Message],
-    ) -> Result<AiResponse> {
+    async fn complete_anthropic(&self, system: &str, messages: &[Message]) -> Result<AiResponse> {
         let api_key = self.config.api_key.as_deref().unwrap_or_default();
 
         // Build Anthropic Messages API request
@@ -103,9 +90,7 @@ impl AiClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| {
-                DeltaError::Storage(format!("Anthropic API request failed: {}", e))
-            })?;
+            .map_err(|e| DeltaError::Storage(format!("Anthropic API request failed: {}", e)))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -128,10 +113,8 @@ impl AiClient {
             .to_string();
 
         let model = json["model"].as_str().unwrap_or("").to_string();
-        let input_tokens =
-            json["usage"]["input_tokens"].as_u64().unwrap_or(0) as u32;
-        let output_tokens =
-            json["usage"]["output_tokens"].as_u64().unwrap_or(0) as u32;
+        let input_tokens = json["usage"]["input_tokens"].as_u64().unwrap_or(0) as u32;
+        let output_tokens = json["usage"]["output_tokens"].as_u64().unwrap_or(0) as u32;
 
         Ok(AiResponse {
             content,
@@ -143,11 +126,7 @@ impl AiClient {
         })
     }
 
-    async fn complete_openai(
-        &self,
-        system: &str,
-        messages: &[Message],
-    ) -> Result<AiResponse> {
+    async fn complete_openai(&self, system: &str, messages: &[Message]) -> Result<AiResponse> {
         let api_key = self.config.api_key.as_deref().unwrap_or_default();
 
         let mut all_messages = vec![serde_json::json!({
@@ -175,9 +154,7 @@ impl AiClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| {
-                DeltaError::Storage(format!("OpenAI API request failed: {}", e))
-            })?;
+            .map_err(|e| DeltaError::Storage(format!("OpenAI API request failed: {}", e)))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -188,9 +165,10 @@ impl AiClient {
             )));
         }
 
-        let json: serde_json::Value = resp.json().await.map_err(|e| {
-            DeltaError::Storage(format!("failed to parse OpenAI response: {}", e))
-        })?;
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| DeltaError::Storage(format!("failed to parse OpenAI response: {}", e)))?;
 
         let content = json["choices"]
             .as_array()
@@ -200,10 +178,8 @@ impl AiClient {
             .to_string();
 
         let model = json["model"].as_str().unwrap_or("").to_string();
-        let input_tokens =
-            json["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32;
-        let output_tokens =
-            json["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32;
+        let input_tokens = json["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32;
+        let output_tokens = json["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32;
 
         Ok(AiResponse {
             content,
@@ -215,11 +191,7 @@ impl AiClient {
         })
     }
 
-    async fn complete_hoosh(
-        &self,
-        system: &str,
-        messages: &[Message],
-    ) -> Result<AiResponse> {
+    async fn complete_hoosh(&self, system: &str, messages: &[Message]) -> Result<AiResponse> {
         let endpoint = self
             .config
             .endpoint
@@ -253,9 +225,11 @@ impl AiClient {
             req = req.header("Authorization", format!("Bearer {}", api_key));
         }
 
-        let resp = req.json(&body).send().await.map_err(|e| {
-            DeltaError::Storage(format!("Hoosh API request failed: {}", e))
-        })?;
+        let resp = req
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| DeltaError::Storage(format!("Hoosh API request failed: {}", e)))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -266,9 +240,10 @@ impl AiClient {
             )));
         }
 
-        let json: serde_json::Value = resp.json().await.map_err(|e| {
-            DeltaError::Storage(format!("failed to parse Hoosh response: {}", e))
-        })?;
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| DeltaError::Storage(format!("failed to parse Hoosh response: {}", e)))?;
 
         let content = json["choices"]
             .as_array()
@@ -278,10 +253,8 @@ impl AiClient {
             .to_string();
 
         let model = json["model"].as_str().unwrap_or("").to_string();
-        let input_tokens =
-            json["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32;
-        let output_tokens =
-            json["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32;
+        let input_tokens = json["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32;
+        let output_tokens = json["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32;
 
         Ok(AiResponse {
             content,
@@ -294,11 +267,7 @@ impl AiClient {
     }
 
     /// Generate a code review summary for a diff.
-    pub async fn review_diff(
-        &self,
-        diff: &str,
-        context: &str,
-    ) -> Result<ReviewSummary> {
+    pub async fn review_diff(&self, diff: &str, context: &str) -> Result<ReviewSummary> {
         let system = "You are a senior code reviewer. Analyze the provided diff and give a structured review. \
             Be concise, constructive, and focus on: bugs, security issues, performance concerns, and code quality. \
             Respond in JSON format with fields: summary (string), risk_level (low/medium/high), \
@@ -367,11 +336,7 @@ impl AiClient {
     }
 
     /// Answer a natural language question about repository contents.
-    pub async fn query_repo(
-        &self,
-        question: &str,
-        context: &str,
-    ) -> Result<String> {
+    pub async fn query_repo(&self, question: &str, context: &str) -> Result<String> {
         let system = "You are a knowledgeable assistant helping developers understand a code repository. \
             Answer questions based on the provided repository context. Be concise and accurate. \
             If you're not sure about something, say so.";
@@ -438,21 +403,14 @@ pub struct PrDescription {
 fn parse_review_summary(content: &str) -> Result<ReviewSummary> {
     // Try to extract JSON from the response (might be wrapped in markdown code blocks)
     let json_str = extract_json(content);
-    serde_json::from_str(json_str).map_err(|e| {
-        DeltaError::Storage(format!(
-            "failed to parse AI review response: {}",
-            e
-        ))
-    })
+    serde_json::from_str(json_str)
+        .map_err(|e| DeltaError::Storage(format!("failed to parse AI review response: {}", e)))
 }
 
 fn parse_pr_description(content: &str) -> Result<PrDescription> {
     let json_str = extract_json(content);
     serde_json::from_str(json_str).map_err(|e| {
-        DeltaError::Storage(format!(
-            "failed to parse AI PR description response: {}",
-            e
-        ))
+        DeltaError::Storage(format!("failed to parse AI PR description response: {}", e))
     })
 }
 

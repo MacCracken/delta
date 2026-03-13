@@ -521,7 +521,9 @@ async fn dispatch_push_pipelines(
 }
 
 /// Determine the sandbox mode based on CI config and system capabilities.
-fn resolve_sandbox_mode(ci_config: &delta_core::config::CiConfig) -> delta_ci::executor::SandboxMode {
+fn resolve_sandbox_mode(
+    ci_config: &delta_core::config::CiConfig,
+) -> delta_ci::executor::SandboxMode {
     use delta_ci::executor::SandboxMode;
 
     if !ci_config.sandbox_enabled {

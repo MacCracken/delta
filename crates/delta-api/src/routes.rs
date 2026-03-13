@@ -3,10 +3,11 @@ pub mod ark;
 pub mod artifacts;
 pub mod audit;
 pub mod auth;
+pub mod backup;
 pub mod badges;
 pub mod branches;
-pub mod federation;
 pub mod collaborators;
+pub mod federation;
 pub mod forks;
 pub mod git;
 pub mod health;
@@ -22,6 +23,7 @@ pub mod status_checks;
 pub mod web;
 pub mod webhooks;
 
+use crate::middleware::metrics_and_rate_limit;
 use crate::state::AppState;
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
@@ -72,6 +74,7 @@ pub fn router(state: AppState) -> Router {
         .nest("/api/v1/registry", ark::router())
         .nest("/api/v1/audit", audit::router())
         .nest("/api/v1/federation", federation::router())
+        .nest("/api/v1/backup", backup::router())
         // OCI Distribution Spec — /v2/ routes
         .merge(oci::router())
         // Git LFS — /{owner}/{name}.git/info/lfs/...
@@ -82,6 +85,12 @@ pub fn router(state: AppState) -> Router {
         .nest("/v1/mcp", mcp::router())
         // Git smart HTTP — no prefix, matches /{owner}/{name}.git/...
         .merge(git::router())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            metrics_and_rate_limit,
+        ))
         .layer(cors)
+        .layer(tower_http::trace::TraceLayer::new_for_http())
+        .layer(tower_http::compression::CompressionLayer::new())
         .with_state(state)
 }

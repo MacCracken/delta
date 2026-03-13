@@ -148,10 +148,7 @@ async fn export_audit_logs(
         Ok((
             StatusCode::OK,
             [
-                (
-                    axum::http::header::CONTENT_TYPE,
-                    "text/csv; charset=utf-8",
-                ),
+                (axum::http::header::CONTENT_TYPE, "text/csv; charset=utf-8"),
                 (
                     axum::http::header::CONTENT_DISPOSITION,
                     "attachment; filename=\"audit_export.csv\"",

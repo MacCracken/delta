@@ -15,8 +15,7 @@ use std::path::Path;
 /// Gracefully degrades if the kernel doesn't support Landlock.
 pub fn apply_landlock(work_dir: &Path) -> Result<(), String> {
     use landlock::{
-        ABI, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr,
-        RulesetStatus,
+        ABI, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr, RulesetStatus,
     };
 
     let abi = ABI::V3;
@@ -29,7 +28,10 @@ pub fn apply_landlock(work_dir: &Path) -> Result<(), String> {
         .create()
         .map_err(|e| format!("landlock: failed to create ruleset: {e}"))?
         // Read-only: system paths
-        .add_rules(path_beneath_rules(&["/usr", "/bin", "/lib", "/lib64", "/etc"], read_access))
+        .add_rules(path_beneath_rules(
+            &["/usr", "/bin", "/lib", "/lib64", "/etc"],
+            read_access,
+        ))
         .map_err(|e| format!("landlock: failed to add read-only rules: {e}"))?
         // Read-write: work directory
         .add_rule(PathBeneath::new(
@@ -88,9 +90,9 @@ fn path_beneath_rules(
 /// delete_module, swapon, swapoff, acct, settimeofday, clock_settime.
 pub fn apply_seccomp() -> Result<(), String> {
     use libc::{
-        BPF_ABS, BPF_JEQ, BPF_JMP, BPF_K, BPF_LD, BPF_RET, BPF_W,
-        PR_SET_NO_NEW_PRIVS, PR_SET_SECCOMP, SECCOMP_MODE_FILTER, SECCOMP_RET_ALLOW,
-        SECCOMP_RET_ERRNO, sock_filter, sock_fprog,
+        BPF_ABS, BPF_JEQ, BPF_JMP, BPF_K, BPF_LD, BPF_RET, BPF_W, PR_SET_NO_NEW_PRIVS,
+        PR_SET_SECCOMP, SECCOMP_MODE_FILTER, SECCOMP_RET_ALLOW, SECCOMP_RET_ERRNO, sock_filter,
+        sock_fprog,
     };
 
     // AUDIT_ARCH_X86_64 constant

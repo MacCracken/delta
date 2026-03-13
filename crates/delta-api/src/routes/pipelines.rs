@@ -301,9 +301,13 @@ async fn handle_pipeline_ws(
     }
 
     // Pipeline already finished (or just finished) — send historical logs from DB
-    let jobs = db::pipeline::list_jobs(&db, &pipeline_id).await.unwrap_or_default();
+    let jobs = db::pipeline::list_jobs(&db, &pipeline_id)
+        .await
+        .unwrap_or_default();
     for job in &jobs {
-        let logs = db::pipeline::get_step_logs(&db, &job.id).await.unwrap_or_default();
+        let logs = db::pipeline::get_step_logs(&db, &job.id)
+            .await
+            .unwrap_or_default();
         for log in &logs {
             let evt = serde_json::json!({
                 "type": "step_output",

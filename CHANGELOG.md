@@ -10,6 +10,29 @@ Versioning follows [AGNOS CalVer](docs/development/versioning.md): `YYYY.M.D`.
 
 ### Added
 
+#### Phase 9 — Scale and Hardening (Complete)
+- Horizontal scaling support
+  - Configurable database connection pool size (`scaling.db_pool_size`)
+  - Configurable request timeout (`scaling.request_timeout_secs`)
+  - `init_pool_sized()` for tunable SQLite/Postgres pool initialization
+- Rate limiting and abuse prevention
+  - In-memory token-bucket rate limiter keyed by IP address (DashMap-based)
+  - Configurable limits: `rate_limit.requests_per_window`, `rate_limit.window_secs`
+  - Separate auth endpoint limiter (`rate_limit.auth_requests_per_window`, default 10/min)
+  - Background cleanup task for expired rate limit entries
+- Performance and observability
+  - Request metrics tracking (status code counts, total duration, request count)
+  - `GET /health/metrics` — uptime, avg latency, status code distribution
+  - `TraceLayer` for HTTP request/response tracing
+  - `CompressionLayer` (gzip) for response compression
+- Backup and disaster recovery
+  - `GET /api/v1/backup/status` — repo/artifact counts, DB size, storage paths
+  - `POST /api/v1/backup/snapshot` — consistent SQLite snapshot via `VACUUM INTO`
+- Monitoring and alerting integration
+  - `GET /health/ready` — readiness probe checking DB connectivity and storage availability
+  - Enhanced health check with version info
+  - Structured JSON logging (`--json-log`) for log aggregation
+
 #### Phase 8 — Federation and Privacy (Complete)
 - Instance-to-instance federation protocol with instance discovery, trust management, and public key exchange
   - `GET /api/v1/federation/info` — public endpoint for remote instance discovery

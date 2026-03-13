@@ -1,7 +1,7 @@
 //! AGNOS ecosystem integration — Daimon capability registration.
 
-use serde::{Deserialize, Serialize};
 use crate::config::AgnosConfig;
+use serde::{Deserialize, Serialize};
 
 /// A capability that Delta provides to the AGNOS agent runtime.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,7 +49,8 @@ pub fn delta_capabilities(version: &str) -> Vec<Capability> {
         Capability {
             name: "artifact-registry".into(),
             version: version.into(),
-            description: "Artifact storage with OCI images, .ark packages, and signed releases".into(),
+            description: "Artifact storage with OCI images, .ark packages, and signed releases"
+                .into(),
             input_schema: None,
             output_schema: None,
         },
@@ -63,7 +64,8 @@ pub fn delta_capabilities(version: &str) -> Vec<Capability> {
         Capability {
             name: "ai-code-review".into(),
             version: version.into(),
-            description: "AI-powered code review, PR descriptions, and natural language queries".into(),
+            description: "AI-powered code review, PR descriptions, and natural language queries"
+                .into(),
             input_schema: None,
             output_schema: None,
         },

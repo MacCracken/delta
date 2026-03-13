@@ -12,10 +12,7 @@ pub fn pipeline_duration(p: &PipelineRun) -> askama::Result<String> {
     let Some(started) = &p.started_at else {
         return Ok("--".to_string());
     };
-    let end = p
-        .finished_at
-        .as_deref()
-        .unwrap_or(started.as_str());
+    let end = p.finished_at.as_deref().unwrap_or(started.as_str());
 
     let Ok(start_dt) = chrono::DateTime::parse_from_rfc3339(started) else {
         return Ok("--".to_string());

@@ -1,8 +1,8 @@
 //! Code search using SQLite FTS5 full-text search.
 
 use crate::Result;
-use sqlx::SqlitePool;
 use serde::Serialize;
+use sqlx::SqlitePool;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchResult {
@@ -13,12 +13,7 @@ pub struct SearchResult {
 }
 
 /// Index a file's content for search.
-pub async fn index_file(
-    pool: &SqlitePool,
-    repo_id: &str,
-    path: &str,
-    content: &str,
-) -> Result<()> {
+pub async fn index_file(pool: &SqlitePool, repo_id: &str, path: &str, content: &str) -> Result<()> {
     // Delete existing entry for this file, then insert new one
     sqlx::query("DELETE FROM code_search WHERE repo_id = ? AND path = ?")
         .bind(repo_id)
@@ -60,7 +55,7 @@ pub async fn search_repo(
 
     let rows = sqlx::query_as::<_, SearchRow>(
         "SELECT repo_id, path, snippet(code_search, 2, '<mark>', '</mark>', '...', 40) as snippet, \
-         rank FROM code_search WHERE repo_id = ? AND code_search MATCH ? ORDER BY rank LIMIT ?"
+         rank FROM code_search WHERE repo_id = ? AND code_search MATCH ? ORDER BY rank LIMIT ?",
     )
     .bind(repo_id)
     .bind(&safe_query)
@@ -69,12 +64,15 @@ pub async fn search_repo(
     .await
     .map_err(|e| crate::DeltaError::Storage(e.to_string()))?;
 
-    Ok(rows.into_iter().map(|r| SearchResult {
-        repo_id: r.repo_id,
-        path: r.path,
-        snippet: r.snippet,
-        rank: r.rank,
-    }).collect())
+    Ok(rows
+        .into_iter()
+        .map(|r| SearchResult {
+            repo_id: r.repo_id,
+            path: r.path,
+            snippet: r.snippet,
+            rank: r.rank,
+        })
+        .collect())
 }
 
 /// Search across all repositories the user has access to.
@@ -105,15 +103,20 @@ pub async fn search_global(
     query_builder = query_builder.bind(&safe_query);
     query_builder = query_builder.bind(limit);
 
-    let rows = query_builder.fetch_all(pool).await
+    let rows = query_builder
+        .fetch_all(pool)
+        .await
         .map_err(|e| crate::DeltaError::Storage(e.to_string()))?;
 
-    Ok(rows.into_iter().map(|r| SearchResult {
-        repo_id: r.repo_id,
-        path: r.path,
-        snippet: r.snippet,
-        rank: r.rank,
-    }).collect())
+    Ok(rows
+        .into_iter()
+        .map(|r| SearchResult {
+            repo_id: r.repo_id,
+            path: r.path,
+            snippet: r.snippet,
+            rank: r.rank,
+        })
+        .collect())
 }
 
 /// Sanitize an FTS5 query string to prevent injection.
@@ -122,7 +125,10 @@ fn sanitize_fts_query(query: &str) -> String {
     query
         .split_whitespace()
         .map(|word| {
-            let clean: String = word.chars().filter(|c| !matches!(c, '"' | '\'' | '*' | '(' | ')' | '{' | '}' | ':')).collect();
+            let clean: String = word
+                .chars()
+                .filter(|c| !matches!(c, '"' | '\'' | '*' | '(' | ')' | '{' | '}' | ':'))
+                .collect();
             format!("\"{}\"", clean)
         })
         .collect::<Vec<_>>()

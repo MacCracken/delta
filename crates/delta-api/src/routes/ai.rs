@@ -9,8 +9,8 @@ use axum::{
     http::StatusCode,
     routing::{get, post},
 };
-use serde::{Deserialize, Serialize};
 use delta_core::{ai::AiClient, db};
+use serde::{Deserialize, Serialize};
 
 use crate::extractors::AuthUser;
 use crate::helpers;
@@ -25,7 +25,10 @@ pub fn router() -> Router<AppState> {
         // AI-powered features
         .route("/{owner}/{name}/ai/review/{number}", post(ai_review_pr))
         .route("/{owner}/{name}/ai/describe-pr", post(ai_describe_pr))
-        .route("/{owner}/{name}/ai/summarize-commit/{sha}", post(ai_summarize_commit))
+        .route(
+            "/{owner}/{name}/ai/summarize-commit/{sha}",
+            post(ai_summarize_commit),
+        )
         .route("/{owner}/{name}/ai/query", post(ai_query_repo))
         // Code search
         .route("/{owner}/{name}/search", get(search_code))
@@ -577,13 +580,22 @@ async fn ai_query_repo(
 
     context.push_str("\n## Recent Commits\n");
     for commit in &recent_commits {
-        context.push_str(&format!("  {} - {} ({})\n", &commit.sha[..8.min(commit.sha.len())], commit.message, commit.author_name));
+        context.push_str(&format!(
+            "  {} - {} ({})\n",
+            &commit.sha[..8.min(commit.sha.len())],
+            commit.message,
+            commit.author_name
+        ));
     }
 
     if let Some(readme) = &readme_content {
         context.push_str("\n## README.md\n");
         // Truncate README if very long
-        let readme_truncated = if readme.len() > 4000 { &readme[..4000] } else { readme };
+        let readme_truncated = if readme.len() > 4000 {
+            &readme[..4000]
+        } else {
+            readme
+        };
         context.push_str(readme_truncated);
         context.push('\n');
     }
@@ -597,9 +609,17 @@ async fn ai_query_repo(
 
     // Try to read content of relevant files for more context
     for file_path in &relevant_files {
-        if let Ok(content) = delta_vcs::browse::read_blob_text(&repo_path, "HEAD", file_path).await {
-            let truncated = if content.len() > 2000 { &content[..2000] } else { &content };
-            context.push_str(&format!("\n## File: {}\n```\n{}\n```\n", file_path, truncated));
+        if let Ok(content) = delta_vcs::browse::read_blob_text(&repo_path, "HEAD", file_path).await
+        {
+            let truncated = if content.len() > 2000 {
+                &content[..2000]
+            } else {
+                &content
+            };
+            context.push_str(&format!(
+                "\n## File: {}\n```\n{}\n```\n",
+                file_path, truncated
+            ));
         }
     }
 
@@ -659,8 +679,7 @@ async fn index_repo(
     Path((owner, name)): Path<(String, String)>,
     AuthUser(user): AuthUser,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let (repo, owner_user) =
-        helpers::resolve_repo_authed(&state, &owner, &name, &user).await?;
+    let (repo, owner_user) = helpers::resolve_repo_authed(&state, &owner, &name, &user).await?;
 
     // Only owner or admin can trigger indexing
     helpers::require_role(
