@@ -1,0 +1,291 @@
+{% extends "layout.html" %}
+
+{% block title %}Settings - {{ owner }}/{{ repo }} - Delta{% endblock %}
+
+{% block head %}
+<style>
+.settings-section { margin-bottom: 32px; }
+.settings-section h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.form-group {
+  margin-bottom: 16px;
+}
+.form-group label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 6px;
+  color: var(--text);
+}
+.form-group .form-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+.form-control {
+  width: 100%;
+  max-width: 480px;
+  padding: 8px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+}
+.form-control:focus {
+  outline: none;
+  border-color: var(--text-link);
+}
+.form-control[readonly] {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+textarea.form-control {
+  min-height: 80px;
+  resize: vertical;
+}
+select.form-control {
+  max-width: 240px;
+  cursor: pointer;
+}
+.collab-table {
+  margin-bottom: 16px;
+}
+.collab-table select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 4px 8px;
+  font-size: 13px;
+}
+.invite-form {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.invite-form .form-group { margin-bottom: 0; }
+.protection-list { margin-bottom: 16px; }
+.protection-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+.protection-item code {
+  font-family: var(--font-mono);
+  background: var(--bg-tertiary);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+.protection-item .protection-detail {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.protection-form {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.protection-form .form-group { margin-bottom: 0; }
+.danger-zone {
+  border: 1px solid var(--red);
+  border-radius: var(--radius);
+  padding: 16px;
+  background: rgba(248,81,73,0.05);
+}
+.danger-zone h2 {
+  color: var(--red);
+  border-bottom-color: rgba(248,81,73,0.3);
+}
+.danger-zone p {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+.btn-danger {
+  background: #da3633;
+  border-color: #f85149;
+  color: #fff;
+}
+.btn-danger:hover { background: #f85149; }
+@media (max-width: 480px) {
+  .invite-form { flex-direction: column; align-items: stretch; }
+  .protection-form { flex-direction: column; align-items: stretch; }
+  .protection-item { flex-direction: column; align-items: flex-start; gap: 4px; }
+  .form-control { max-width: 100%; }
+  select.form-control { max-width: 100%; }
+}
+</style>
+{% endblock %}
+
+{% block nav %}
+<nav>
+  <a href="/{{ owner }}/{{ repo }}">Code</a>
+  <a href="/{{ owner }}/{{ repo }}/-/pipelines">Pipelines</a>
+  <a href="/{{ owner }}/{{ repo }}/-/pulls">Pull Requests</a>
+</nav>
+{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb">
+  <a href="/{{ owner }}">{{ owner }}</a>
+  <span class="sep">/</span>
+  <a href="/{{ owner }}/{{ repo }}">{{ repo }}</a>
+  <span class="sep">/</span>
+  Settings
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Repository Settings</h1>
+</div>
+
+<div class="settings-section">
+  <h2>General</h2>
+  <div class="card">
+    <div class="card-body">
+      <div class="form-group">
+        <label for="repo-name">Repository name</label>
+        <input type="text" id="repo-name" class="form-control" value="{{ repo }}" readonly>
+      </div>
+
+      <div class="form-group">
+        <label for="repo-description">Description</label>
+        <textarea id="repo-description" class="form-control" placeholder="A short description of the repository...">{% match description %}{% when Some with (d) %}{{ d }}{% when None %}{% endmatch %}</textarea>
+      </div>
+
+      <div class="form-group">
+        <label for="repo-visibility">Visibility</label>
+        <select id="repo-visibility" class="form-control">
+          <option value="public"{% if visibility == "public" %} selected{% endif %}>Public</option>
+          <option value="internal"{% if visibility == "internal" %} selected{% endif %}>Internal</option>
+          <option value="private"{% if visibility == "private" %} selected{% endif %}>Private</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="default-branch">Default branch</label>
+        <select id="default-branch" class="form-control">
+          {% for branch in branches %}
+          <option value="{{ branch }}"{% if branch.as_str() == default_branch.as_str() %} selected{% endif %}>{{ branch }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <button class="btn btn-primary">Save changes</button>
+    </div>
+  </div>
+</div>
+
+<div class="settings-section">
+  <h2>Collaborators</h2>
+  <div class="card">
+    <div class="card-body">
+      {% if collaborators.is_empty() %}
+      <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 16px;">No collaborators have been added yet.</p>
+      {% else %}
+      <table class="collab-table">
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>Role</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in collaborators %}
+          <tr>
+            <td data-label="User"><a href="/{{ c.username }}">{{ c.username }}</a></td>
+            <td data-label="Role">
+              <select>
+                <option value="read"{% if c.role == "read" %} selected{% endif %}>Read</option>
+                <option value="write"{% if c.role == "write" %} selected{% endif %}>Write</option>
+                <option value="admin"{% if c.role == "admin" %} selected{% endif %}>Admin</option>
+              </select>
+            </td>
+            <td><button class="btn" style="font-size: 12px; padding: 4px 10px;">Remove</button></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+
+      <div class="invite-form">
+        <div class="form-group">
+          <label for="invite-username">Invite collaborator</label>
+          <input type="text" id="invite-username" class="form-control" placeholder="Username" style="max-width: 240px;">
+        </div>
+        <div class="form-group">
+          <label for="invite-role">Role</label>
+          <select id="invite-role" class="form-control" style="max-width: 140px;">
+            <option value="read">Read</option>
+            <option value="write" selected>Write</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <button class="btn btn-primary">Add</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="settings-section">
+  <h2>Branch Protection</h2>
+  <div class="card">
+    <div class="card-body">
+      {% if protections.is_empty() %}
+      <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 16px;">No branch protection rules configured.</p>
+      {% else %}
+      <div class="protection-list">
+        {% for rule in protections %}
+        <div class="protection-item">
+          <div>
+            <code>{{ rule.branch_pattern }}</code>
+            <span class="protection-detail">&mdash; {{ rule.required_approvals }} required approval{% if rule.required_approvals != 1 %}s{% endif %}</span>
+          </div>
+          <button class="btn" style="font-size: 12px; padding: 4px 10px;">Delete</button>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <div class="protection-form">
+        <div class="form-group">
+          <label for="protect-pattern">Branch pattern</label>
+          <input type="text" id="protect-pattern" class="form-control" placeholder="main" style="max-width: 200px;">
+        </div>
+        <div class="form-group">
+          <label for="protect-approvals">Required approvals</label>
+          <input type="number" id="protect-approvals" class="form-control" value="1" min="0" max="10" style="max-width: 100px;">
+        </div>
+        <button class="btn btn-primary">Add rule</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="settings-section">
+  <div class="danger-zone">
+    <h2>Danger Zone</h2>
+    <p>Once you delete a repository, there is no going back. Please be certain.</p>
+    <button class="btn btn-danger" onclick="if(!confirm('Are you sure you want to delete this repository? This action cannot be undone.')) return false;">Delete this repository</button>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,172 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ filename }} - {{ owner }}/{{ repo }} - Delta{% endblock %}
+
+{% block head %}
+<style>
+.file-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.file-header .file-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+}
+.file-header .file-size {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.file-header .file-actions {
+  display: flex;
+  gap: 8px;
+}
+.code-viewer {
+  background: #010409;
+  border: 1px solid var(--border);
+  border-radius: 0 0 var(--radius) var(--radius);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.code-viewer table {
+  border: none;
+  border-collapse: collapse;
+  width: 100%;
+}
+.code-viewer table tr:hover td { background: rgba(88,166,255,0.05); }
+.code-viewer table tr:last-child td { border-bottom: none; }
+.code-viewer td {
+  padding: 0;
+  border-bottom: none;
+  vertical-align: top;
+}
+.code-viewer .line-num {
+  width: 1%;
+  min-width: 50px;
+  padding: 0 12px;
+  text-align: right;
+  color: #484f58;
+  user-select: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.code-viewer .line-num:hover { color: var(--text-link); }
+.code-viewer .line-num a {
+  color: inherit;
+  text-decoration: none;
+  display: block;
+}
+.code-viewer .line-content {
+  padding: 0 16px 0 8px;
+  white-space: pre;
+  color: var(--text);
+}
+.code-viewer .line-content:target,
+.code-viewer tr:target td { background: rgba(210,153,34,0.15); }
+.branch-selector {
+  position: relative;
+  display: inline-block;
+}
+.branch-selector .btn {
+  min-width: 140px;
+  justify-content: space-between;
+}
+.branch-dropdown {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 10;
+  min-width: 220px;
+  margin-top: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  max-height: 300px;
+  overflow-y: auto;
+}
+.branch-dropdown.open { display: block; }
+.branch-dropdown a {
+  display: block;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+.branch-dropdown a:last-child { border-bottom: none; }
+.branch-dropdown a:hover { background: var(--bg-tertiary); text-decoration: none; }
+@media (max-width: 480px) {
+  .file-header { flex-direction: column; align-items: flex-start; }
+  .code-viewer { font-size: 11px; }
+  .code-viewer .line-num { min-width: 36px; padding: 0 6px; }
+  .code-viewer .line-content { padding: 0 8px 0 4px; }
+}
+</style>
+{% endblock %}
+
+{% block nav %}
+<nav>
+  <a href="/{{ owner }}/{{ repo }}" class="active">Code</a>
+  <a href="/{{ owner }}/{{ repo }}/-/pipelines">Pipelines</a>
+  <a href="/{{ owner }}/{{ repo }}/-/pulls">Pull Requests</a>
+</nav>
+{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb">
+  <a href="/{{ owner }}">{{ owner }}</a>
+  <span class="sep">/</span>
+  <a href="/{{ owner }}/{{ repo }}">{{ repo }}</a>
+  {% for part in path_parts %}
+  <span class="sep">/</span>
+  <a href="{{ part.url }}">{{ part.name }}</a>
+  {% endfor %}
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="card" style="margin-bottom: 16px;">
+  <div class="card-header file-header">
+    <div class="file-info">
+      <strong>{{ filename }}</strong>
+      <span class="file-size">{{ size_display }}</span>
+      <span class="time-ago">{{ line_count }} lines</span>
+    </div>
+    <div class="file-actions">
+      <a href="/{{ owner }}/{{ repo }}/-/raw/{{ rev }}/{{ path }}" class="btn">Raw</a>
+      <a href="/{{ owner }}/{{ repo }}/-/blame/{{ rev }}/{{ path }}" class="btn">Blame</a>
+    </div>
+  </div>
+</div>
+
+<div class="code-viewer">
+  <table>
+    <tbody>
+      {% for line in content.lines() %}
+      <tr id="L{{ loop.index }}">
+        <td class="line-num"><a href="#L{{ loop.index }}">{{ loop.index }}</a></td>
+        <td class="line-content">{{ line }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('click', function(e) {
+  document.querySelectorAll('.branch-dropdown.open').forEach(function(d) {
+    if (!d.parentElement.contains(e.target)) d.classList.remove('open');
+  });
+});
+</script>
+{% endblock %}

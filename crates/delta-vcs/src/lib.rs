@@ -3,6 +3,7 @@
 //! Handles bare repository management, git protocol (smart HTTP + SSH),
 //! ref management, diff generation, and merge execution.
 
+pub mod browse;
 pub mod diff;
 pub mod hosting;
 pub mod merge;

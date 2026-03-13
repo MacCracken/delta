@@ -1,0 +1,293 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ pr.title }} #{{ pr.number }} - {{ owner }}/{{ repo }} - Delta{% endblock %}
+
+{% block head %}
+<style>
+.pr-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.pr-title-row h1 {
+  font-size: 20px;
+  font-weight: 600;
+  flex: 1;
+}
+.pr-title-row .pr-number-title {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.pr-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+.pr-meta code {
+  font-family: var(--font-mono);
+  background: var(--bg-tertiary);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.state-badge {
+  display: inline-block;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+.state-open { background: #0d301d; color: var(--green); }
+.state-closed { background: #300d0d; color: var(--red); }
+.state-merged { background: #1e0d30; color: var(--purple); }
+.pr-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+}
+.pr-tabs a {
+  padding: 8px 16px;
+  font-size: 14px;
+  color: var(--text-muted);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.pr-tabs a:hover { color: var(--text); text-decoration: none; }
+.pr-tabs a.active { color: var(--text); border-bottom-color: var(--text-link); font-weight: 600; }
+.comment-card {
+  margin-bottom: 12px;
+}
+.comment-card .card-header {
+  font-size: 13px;
+}
+.comment-card .card-header .comment-author { font-weight: 600; color: var(--text); }
+.comment-card .card-header .comment-date { color: var(--text-muted); }
+.comment-card .card-body {
+  font-size: 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.comment-file-ref {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+.review-state {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+.review-approved { background: #0d301d; color: var(--green); }
+.review-changes_requested { background: #300d0d; color: var(--red); }
+.review-commented { background: var(--bg-tertiary); color: var(--text-muted); }
+.comment-form {
+  margin-top: 24px;
+}
+.comment-form textarea {
+  width: 100%;
+  min-height: 100px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 12px;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  resize: vertical;
+}
+.comment-form textarea:focus {
+  outline: none;
+  border-color: var(--text-link);
+}
+.comment-form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  justify-content: flex-end;
+}
+.diff-viewer {
+  background: #010409;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  white-space: pre-wrap;
+  word-break: break-all;
+  padding: 12px 16px;
+  color: var(--text-muted);
+}
+.check-list { display: flex; flex-direction: column; gap: 8px; }
+.check-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 14px;
+}
+.check-item .check-name { flex: 1; }
+.check-item .check-context { color: var(--text-muted); font-size: 13px; }
+.pr-action-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 24px;
+}
+.btn-danger {
+  background: #da3633;
+  border-color: #f85149;
+  color: #fff;
+}
+.btn-danger:hover { background: #f85149; }
+.btn-merge {
+  background: #8957e5;
+  border-color: #a371f7;
+  color: #fff;
+}
+.btn-merge:hover { background: #a371f7; }
+@media (max-width: 480px) {
+  .pr-title-row { flex-direction: column; }
+  .pr-meta { flex-direction: column; align-items: flex-start; }
+  .pr-tabs { overflow-x: auto; }
+  .comment-form-actions { flex-direction: column; }
+  .pr-action-buttons { flex-direction: column; }
+}
+</style>
+{% endblock %}
+
+{% block nav %}
+<nav>
+  <a href="/{{ owner }}/{{ repo }}">Code</a>
+  <a href="/{{ owner }}/{{ repo }}/-/pipelines">Pipelines</a>
+  <a href="/{{ owner }}/{{ repo }}/-/pulls" class="active">Pull Requests</a>
+</nav>
+{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb">
+  <a href="/{{ owner }}">{{ owner }}</a>
+  <span class="sep">/</span>
+  <a href="/{{ owner }}/{{ repo }}">{{ repo }}</a>
+  <span class="sep">/</span>
+  <a href="/{{ owner }}/{{ repo }}/-/pulls">Pull Requests</a>
+  <span class="sep">/</span>
+  #{{ pr.number }}
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="pr-title-row">
+  <h1>{{ pr.title }} <span class="pr-number-title">#{{ pr.number }}</span></h1>
+  <span class="state-badge state-{{ pr.state }}">{{ pr.state }}</span>
+</div>
+
+<div class="pr-meta">
+  <span>{{ author_name }} wants to merge</span>
+  <code>{{ pr.head_branch }}</code>
+  <span>into</span>
+  <code>{{ pr.base_branch }}</code>
+  <span>&middot;</span>
+  <span class="time-ago">{{ pr.created_at }}</span>
+</div>
+
+<div class="pr-tabs">
+  <a href="/{{ owner }}/{{ repo }}/-/pulls/{{ pr.number }}?tab=conversation"{% if tab == "conversation" %} class="active"{% endif %}>Conversation</a>
+  <a href="/{{ owner }}/{{ repo }}/-/pulls/{{ pr.number }}?tab=diff"{% if tab == "diff" %} class="active"{% endif %}>Diff</a>
+  <a href="/{{ owner }}/{{ repo }}/-/pulls/{{ pr.number }}?tab=checks"{% if tab == "checks" %} class="active"{% endif %}>Checks</a>
+</div>
+
+{% if tab == "conversation" %}
+
+{% for review in reviews %}
+<div class="card comment-card">
+  <div class="card-header">
+    <span>
+      <span class="comment-author">{{ review.reviewer_name }}</span>
+      <span class="comment-date">reviewed {{ review.created_at }}</span>
+    </span>
+    <span class="review-state review-{{ review.state }}">{{ review.state }}</span>
+  </div>
+  {% if !review.body.is_empty() %}
+  <div class="card-body">{{ review.body }}</div>
+  {% endif %}
+</div>
+{% endfor %}
+
+{% for comment in comments %}
+<div class="card comment-card">
+  <div class="card-header">
+    <span>
+      <span class="comment-author">{{ comment.author_name }}</span>
+      <span class="comment-date">{{ comment.created_at }}</span>
+    </span>
+  </div>
+  <div class="card-body">
+    {% match comment.file_path %}
+    {% when Some with (fp) %}
+    <div class="comment-file-ref">{{ fp }}{% match comment.line %}{% when Some with (ln) %}:{{ ln }}{% when None %}{% endmatch %}</div>
+    {% when None %}
+    {% endmatch %}
+    {{ comment.body }}
+  </div>
+</div>
+{% endfor %}
+
+<div class="comment-form">
+  <div class="card">
+    <div class="card-header"><h3>Add a comment</h3></div>
+    <div class="card-body">
+      <textarea placeholder="Leave a comment..."></textarea>
+      <div class="comment-form-actions">
+        <button class="btn btn-primary">Comment</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="pr-action-buttons">
+  {% if pr.state == "open" %}
+  <button class="btn btn-merge">Merge pull request</button>
+  <button class="btn btn-danger">Close pull request</button>
+  {% endif %}
+</div>
+
+{% else if tab == "diff" %}
+
+<div class="diff-viewer">{{ diff }}</div>
+
+{% else if tab == "checks" %}
+
+{% if checks.is_empty() %}
+<div class="empty-state">
+  <h2>No status checks</h2>
+  <p>No CI checks have been reported for this pull request.</p>
+</div>
+{% else %}
+<div class="check-list">
+  {% for check in checks %}
+  <div class="check-item">
+    <span class="status status-{{ check.state }}">
+      <span class="status-dot"></span>
+    </span>
+    <span class="check-name">{{ check.context }}</span>
+    <span class="time-ago">{{ check.created_at }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% endif %}
+{% endblock %}

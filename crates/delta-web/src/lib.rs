@@ -6,3 +6,7 @@
 
 pub mod filters;
 pub mod pipelines;
+pub mod pulls;
+pub mod repo;
+pub mod settings;
+pub mod user;

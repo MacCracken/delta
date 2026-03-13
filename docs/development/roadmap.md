@@ -36,14 +36,14 @@ Phases 1–5 are complete. Only remaining work is listed below.
 - [x] Signed artifacts with ed25519 verification
 - [x] Download statistics and audit trail
 
-## Phase 6 — Web Interface
+## Phase 6 — Web Interface (Complete)
 
-- [ ] Repository browser (file tree, blame, history)
-- [ ] Commit and diff viewer
-- [ ] Pull request UI (conversation, diff, checks)
+- [x] Repository browser (file tree, blame, history)
+- [x] Commit and diff viewer
+- [x] Pull request UI (conversation, diff, checks)
 - [x] CI/CD dashboard (pipeline list, log viewer with live streaming)
-- [ ] User/org profile pages
-- [ ] Settings and administration panels
+- [x] User/org profile pages
+- [x] Settings and administration panels
 
 ## Phase 7 — AI-Native Features
 

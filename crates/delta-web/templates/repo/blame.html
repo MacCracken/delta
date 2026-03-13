@@ -1,0 +1,128 @@
+{% extends "layout.html" %}
+
+{% block title %}Blame: {{ filename }} - {{ owner }}/{{ repo }} - Delta{% endblock %}
+
+{% block head %}
+<style>
+.blame-viewer {
+  background: #010409;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.blame-viewer table {
+  border: none;
+  border-collapse: collapse;
+  width: 100%;
+}
+.blame-viewer table tr:last-child td { border-bottom: none; }
+.blame-viewer td {
+  padding: 0;
+  border-bottom: none;
+  vertical-align: top;
+}
+.blame-viewer .blame-info {
+  width: 1%;
+  min-width: 200px;
+  padding: 0 12px;
+  white-space: nowrap;
+  border-right: 1px solid var(--border);
+  background: var(--bg-secondary);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.blame-viewer .blame-info.group-start {
+  border-top: 2px solid var(--border);
+}
+.blame-viewer .blame-sha {
+  font-family: var(--font-mono);
+  color: var(--text-link);
+}
+.blame-viewer .blame-sha a { color: var(--text-link); }
+.blame-viewer .blame-author { color: var(--text); font-weight: 500; }
+.blame-viewer .blame-date { color: var(--text-muted); margin-left: 8px; }
+.blame-viewer .line-num {
+  width: 1%;
+  min-width: 50px;
+  padding: 0 12px;
+  text-align: right;
+  color: #484f58;
+  user-select: none;
+  white-space: nowrap;
+}
+.blame-viewer .line-num.group-start {
+  border-top: 2px solid var(--border);
+}
+.blame-viewer .line-content {
+  padding: 0 16px 0 8px;
+  white-space: pre;
+  color: var(--text);
+}
+.blame-viewer .line-content.group-start {
+  border-top: 2px solid var(--border);
+}
+@media (max-width: 768px) {
+  .blame-viewer .blame-info { min-width: 150px; font-size: 11px; padding: 0 8px; }
+  .blame-viewer .blame-date { display: none; }
+}
+@media (max-width: 480px) {
+  .blame-viewer { font-size: 11px; }
+  .blame-viewer .blame-info { min-width: 100px; }
+  .blame-viewer .line-num { min-width: 36px; padding: 0 6px; }
+  .blame-viewer .line-content { padding: 0 8px 0 4px; }
+}
+</style>
+{% endblock %}
+
+{% block nav %}
+<nav>
+  <a href="/{{ owner }}/{{ repo }}" class="active">Code</a>
+  <a href="/{{ owner }}/{{ repo }}/-/pipelines">Pipelines</a>
+  <a href="/{{ owner }}/{{ repo }}/-/pulls">Pull Requests</a>
+</nav>
+{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb">
+  <a href="/{{ owner }}">{{ owner }}</a>
+  <span class="sep">/</span>
+  <a href="/{{ owner }}/{{ repo }}">{{ repo }}</a>
+  {% for part in path_parts %}
+  <span class="sep">/</span>
+  <a href="{{ part.url }}">{{ part.name }}</a>
+  {% endfor %}
+  <span class="sep">/</span>
+  Blame
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>{{ filename }}</h1>
+  <a href="/{{ owner }}/{{ repo }}/-/blob/{{ rev }}/{{ path }}" class="btn">Normal view</a>
+</div>
+
+<div class="blame-viewer">
+  <table>
+    <tbody>
+      {% for line in lines %}
+      <tr>
+        <td class="blame-info{% if line.is_group_start %} group-start{% endif %}">
+          {% if line.is_group_start %}
+          <span class="blame-sha"><a href="/{{ owner }}/{{ repo }}/-/commit/{{ line.sha }}">{{ line.short_sha }}</a></span>
+          <span class="blame-author">{{ line.author }}</span>
+          <span class="blame-date">{{ line.date }}</span>
+          {% endif %}
+        </td>
+        <td class="line-num{% if line.is_group_start %} group-start{% endif %}">{{ line.line_number }}</td>
+        <td class="line-content{% if line.is_group_start %} group-start{% endif %}">{{ line.content }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

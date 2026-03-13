@@ -1,0 +1,156 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ profile_user.username }} - Delta{% endblock %}
+
+{% block head %}
+<style>
+.profile-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.profile-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--bg-tertiary);
+  border: 2px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.profile-info h1 {
+  font-size: 20px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.profile-info .username {
+  font-size: 14px;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.profile-info .member-since {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+.bot-badge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.repo-list { display: flex; flex-direction: column; gap: 12px; }
+.repo-item {
+  padding: 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.repo-item:hover { border-color: var(--text-link); }
+.repo-item-info { flex: 1; }
+.repo-item-info h3 {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.repo-item-info h3 a { color: var(--text-link); }
+.repo-item-info p {
+  font-size: 14px;
+  color: var(--text-muted);
+}
+.repo-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.visibility-badge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-weight: 500;
+}
+@media (max-width: 480px) {
+  .profile-header { flex-direction: column; align-items: flex-start; }
+  .repo-item { flex-direction: column; }
+  .repo-item-meta { align-self: flex-start; }
+}
+</style>
+{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb">
+  <a href="/">Delta</a>
+  <span class="sep">/</span>
+  {{ profile_user.username }}
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="profile-header">
+  <div class="profile-avatar">{{ profile_user.username.chars().next().unwrap_or('?').to_ascii_uppercase() }}</div>
+  <div class="profile-info">
+    <h1>
+      {% match profile_user.display_name %}
+      {% when Some with (dn) %}
+      {{ dn }}
+      {% when None %}
+      {{ profile_user.username }}
+      {% endmatch %}
+      {% if profile_user.is_agent %}<span class="bot-badge">bot</span>{% endif %}
+    </h1>
+    <div class="username">@{{ profile_user.username }}</div>
+    <div class="member-since">Member since {{ profile_user.created_at }}</div>
+  </div>
+</div>
+
+<div class="page-header">
+  <h1>Repositories <span class="time-ago" style="font-weight: 400; font-size: 14px;">({{ repo_count }})</span></h1>
+</div>
+
+{% if repos.is_empty() %}
+<div class="empty-state">
+  <h2>No repositories</h2>
+  <p>This user hasn't created any repositories yet.</p>
+</div>
+{% else %}
+<div class="repo-list">
+  {% for r in repos %}
+  <div class="repo-item">
+    <div class="repo-item-info">
+      <h3><a href="/{{ profile_user.username }}/{{ r.name }}">{{ r.name }}</a></h3>
+      {% match r.description %}
+      {% when Some with (desc) %}
+      <p>{{ desc }}</p>
+      {% when None %}
+      {% endmatch %}
+    </div>
+    <div class="repo-item-meta">
+      <span class="visibility-badge">{{ r.visibility }}</span>
+      <span class="time-ago">{{ r.updated_at }}</span>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

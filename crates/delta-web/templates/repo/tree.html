@@ -1,0 +1,163 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ path }}{% if !path.is_empty() %} - {% endif %}{{ owner }}/{{ repo }} - Delta{% endblock %}
+
+{% block head %}
+<style>
+.branch-selector {
+  position: relative;
+  display: inline-block;
+}
+.branch-selector .btn {
+  min-width: 140px;
+  justify-content: space-between;
+}
+.branch-dropdown {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 10;
+  min-width: 220px;
+  margin-top: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  max-height: 300px;
+  overflow-y: auto;
+}
+.branch-dropdown.open { display: block; }
+.branch-dropdown a {
+  display: block;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+.branch-dropdown a:last-child { border-bottom: none; }
+.branch-dropdown a:hover { background: var(--bg-tertiary); text-decoration: none; }
+.branch-dropdown a.current { color: var(--green); font-weight: 600; }
+.tree-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.file-icon {
+  display: inline-block;
+  width: 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-right: 6px;
+}
+.readme-card { margin-top: 24px; }
+.readme-card .card-body {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+}
+@media (max-width: 480px) {
+  .tree-header { flex-direction: column; align-items: flex-start; }
+}
+</style>
+{% endblock %}
+
+{% block nav %}
+<nav>
+  <a href="/{{ owner }}/{{ repo }}" class="active">Code</a>
+  <a href="/{{ owner }}/{{ repo }}/-/pipelines">Pipelines</a>
+  <a href="/{{ owner }}/{{ repo }}/-/pulls">Pull Requests</a>
+</nav>
+{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb">
+  <a href="/{{ owner }}">{{ owner }}</a>
+  <span class="sep">/</span>
+  <a href="/{{ owner }}/{{ repo }}">{{ repo }}</a>
+  {% for part in path_parts %}
+  <span class="sep">/</span>
+  <a href="{{ part.url }}">{{ part.name }}</a>
+  {% endfor %}
+</div>
+{% endblock %}
+
+{% block content %}
+{% if is_empty %}
+<div class="empty-state">
+  <h2>This repository is empty</h2>
+  <p>Push your first commit to get started.</p>
+</div>
+{% else %}
+<div class="tree-header">
+  <div class="branch-selector">
+    <button class="btn" onclick="this.nextElementSibling.classList.toggle('open')">
+      <span>{{ rev }}</span>
+      <span class="chevron">&#9656;</span>
+    </button>
+    <div class="branch-dropdown">
+      {% for branch in branches %}
+      <a href="/{{ owner }}/{{ repo }}/-/tree/{{ branch }}/{{ path }}"{% if branch.as_str() == rev.as_str() %} class="current"{% endif %}>{{ branch }}</a>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Last commit message</th>
+      <th>Last modified</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for entry in entries %}
+    <tr>
+      <td data-label="Name">
+        {% if entry.kind == "tree" %}
+        <span class="file-icon">&#128193;</span>
+        <a href="/{{ owner }}/{{ repo }}/-/tree/{{ rev }}/{{ entry.path }}">{{ entry.name }}</a>
+        {% else %}
+        <span class="file-icon">&#128196;</span>
+        <a href="/{{ owner }}/{{ repo }}/-/blob/{{ rev }}/{{ entry.path }}">{{ entry.name }}</a>
+        {% endif %}
+      </td>
+      <td data-label="Last commit">
+        <span class="time-ago">{{ entry.last_commit_message }}</span>
+      </td>
+      <td data-label="Modified">
+        <span class="time-ago">{{ entry.last_commit_date }}</span>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% match readme %}
+{% when Some with (readme_content) %}
+<div class="card readme-card">
+  <div class="card-header">
+    <h3>README.md</h3>
+  </div>
+  <div class="card-body">{{ readme_content }}</div>
+</div>
+{% when None %}
+{% endmatch %}
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('click', function(e) {
+  document.querySelectorAll('.branch-dropdown.open').forEach(function(d) {
+    if (!d.parentElement.contains(e.target)) d.classList.remove('open');
+  });
+});
+</script>
+{% endblock %}
