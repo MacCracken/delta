@@ -16,15 +16,28 @@ struct Cli {
     /// Override listen port
     #[arg(short, long)]
     port: Option<u16>,
+
+    /// Emit structured JSON logs (AGNOS journald compatible)
+    #[arg(long, default_value_t = false)]
+    json_log: bool,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("delta=info".parse()?))
-        .init();
-
     let cli = Cli::parse();
+
+    let env_filter =
+        EnvFilter::from_default_env().add_directive("delta=info".parse()?);
+    if cli.json_log {
+        tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(env_filter)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .init();
+    }
 
     let mut config = if std::path::Path::new(&cli.config).exists() {
         let contents = std::fs::read_to_string(&cli.config)?;
@@ -72,6 +85,17 @@ async fn main() -> anyhow::Result<()> {
                     .await
             {
                 tracing::error!("SSH server error: {}", e);
+            }
+        });
+    }
+
+    // Register with AGNOS Daimon agent runtime if enabled
+    if config.agnos.enabled {
+        let agnos_config = config.agnos.clone();
+        tokio::spawn(async move {
+            match delta_core::agnos::register_with_daimon(&agnos_config, env!("CARGO_PKG_VERSION")).await {
+                Ok(()) => tracing::info!("registered with daimon agent runtime"),
+                Err(e) => tracing::warn!("daimon registration failed (non-fatal): {}", e),
             }
         });
     }

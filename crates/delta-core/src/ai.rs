@@ -37,7 +37,8 @@ impl AiClient {
         if !config.enabled {
             return Err(DeltaError::Storage("AI features are not enabled".into()));
         }
-        if config.api_key.is_none() {
+        // Hoosh (local gateway) does not require an API key
+        if config.api_key.is_none() && !matches!(config.provider, AiProvider::Hoosh) {
             return Err(DeltaError::Storage(
                 "AI API key is not configured".into(),
             ));
@@ -56,7 +57,8 @@ impl AiClient {
 
     /// Check if AI features are available.
     pub fn is_available(config: &AiConfig) -> bool {
-        config.enabled && config.api_key.is_some()
+        config.enabled
+            && (config.api_key.is_some() || matches!(config.provider, AiProvider::Hoosh))
     }
 
     /// Send messages to the LLM and get a response.
@@ -68,6 +70,7 @@ impl AiClient {
         match self.config.provider {
             AiProvider::Anthropic => self.complete_anthropic(system, messages).await,
             AiProvider::OpenAI => self.complete_openai(system, messages).await,
+            AiProvider::Hoosh => self.complete_hoosh(system, messages).await,
         }
     }
 
@@ -187,6 +190,84 @@ impl AiClient {
 
         let json: serde_json::Value = resp.json().await.map_err(|e| {
             DeltaError::Storage(format!("failed to parse OpenAI response: {}", e))
+        })?;
+
+        let content = json["choices"]
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|choice| choice["message"]["content"].as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let model = json["model"].as_str().unwrap_or("").to_string();
+        let input_tokens =
+            json["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32;
+        let output_tokens =
+            json["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32;
+
+        Ok(AiResponse {
+            content,
+            model,
+            usage: Usage {
+                input_tokens,
+                output_tokens,
+            },
+        })
+    }
+
+    async fn complete_hoosh(
+        &self,
+        system: &str,
+        messages: &[Message],
+    ) -> Result<AiResponse> {
+        let endpoint = self
+            .config
+            .endpoint
+            .as_deref()
+            .unwrap_or("http://localhost:8088");
+
+        let mut all_messages = vec![serde_json::json!({
+            "role": "system",
+            "content": system,
+        })];
+        for m in messages {
+            all_messages.push(serde_json::json!({
+                "role": m.role,
+                "content": m.content,
+            }));
+        }
+
+        let body = serde_json::json!({
+            "model": self.config.model,
+            "max_tokens": self.config.max_tokens,
+            "messages": all_messages,
+        });
+
+        let url = format!("{}/v1/chat/completions", endpoint.trim_end_matches('/'));
+        let mut req = self
+            .http
+            .post(&url)
+            .header("content-type", "application/json");
+
+        if let Some(ref api_key) = self.config.api_key {
+            req = req.header("Authorization", format!("Bearer {}", api_key));
+        }
+
+        let resp = req.json(&body).send().await.map_err(|e| {
+            DeltaError::Storage(format!("Hoosh API request failed: {}", e))
+        })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(DeltaError::Storage(format!(
+                "Hoosh API error {}: {}",
+                status, body
+            )));
+        }
+
+        let json: serde_json::Value = resp.json().await.map_err(|e| {
+            DeltaError::Storage(format!("failed to parse Hoosh response: {}", e))
         })?;
 
         let content = json["choices"]

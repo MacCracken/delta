@@ -1,6 +1,6 @@
-//! ed25519 artifact signature verification.
+//! ed25519 artifact signature verification and signing.
 
-use ed25519_dalek::{Signature, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -38,6 +38,35 @@ pub fn verify_signature(
 
     use ed25519_dalek::Verifier;
     Ok(verifying_key.verify(message.as_bytes(), &signature).is_ok())
+}
+
+/// Sign a content hash with an ed25519 private key.
+/// - `signing_key_hex`: 32-byte ed25519 private key seed as hex (64 chars)
+/// - `message`: the content hash string to sign
+/// Returns the signature as hex (128 chars = 64 bytes).
+pub fn sign_content(signing_key_hex: &str, message: &str) -> Result<String, String> {
+    let sk_bytes =
+        hex::decode(signing_key_hex).map_err(|e| format!("invalid signing key hex: {}", e))?;
+
+    let sk_array: [u8; 32] = sk_bytes
+        .try_into()
+        .map_err(|_| "signing key must be 32 bytes".to_string())?;
+
+    let signing_key = SigningKey::from_bytes(&sk_array);
+    let signature = signing_key.sign(message.as_bytes());
+
+    Ok(hex::encode(signature.to_bytes()))
+}
+
+/// Map a verification result to a Sigil-compatible trust level string.
+pub fn sigil_trust_level(signature_valid: bool, key_in_system_keyring: bool) -> &'static str {
+    if signature_valid && key_in_system_keyring {
+        "system_core"
+    } else if signature_valid {
+        "verified"
+    } else {
+        "unverified"
+    }
 }
 
 #[cfg(test)]
@@ -104,5 +133,51 @@ mod tests {
         let result = verify_signature(&pk_hex, "msg", "abcd");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("64 bytes"));
+    }
+
+    #[test]
+    fn test_sign_content_roundtrip() {
+        let seed: [u8; 32] = [7u8; 32];
+        let signing_key = SigningKey::from_bytes(&seed);
+        let verifying_key = signing_key.verifying_key();
+        let sk_hex = hex::encode(seed);
+        let pk_hex = hex::encode(verifying_key.to_bytes());
+
+        let message = "blake3-content-hash-abc123";
+        let sig_hex = sign_content(&sk_hex, message).expect("signing should succeed");
+        assert_eq!(sig_hex.len(), 128); // 64 bytes = 128 hex chars
+
+        let valid = verify_signature(&pk_hex, message, &sig_hex).expect("verify should succeed");
+        assert!(valid);
+    }
+
+    #[test]
+    fn test_sign_content_invalid_hex() {
+        let result = sign_content("not-valid-hex", "msg");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid signing key hex"));
+    }
+
+    #[test]
+    fn test_sign_content_wrong_length() {
+        let result = sign_content("abcd", "msg");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("32 bytes"));
+    }
+
+    #[test]
+    fn test_sigil_trust_level_system_core() {
+        assert_eq!(sigil_trust_level(true, true), "system_core");
+    }
+
+    #[test]
+    fn test_sigil_trust_level_verified() {
+        assert_eq!(sigil_trust_level(true, false), "verified");
+    }
+
+    #[test]
+    fn test_sigil_trust_level_unverified() {
+        assert_eq!(sigil_trust_level(false, true), "unverified");
+        assert_eq!(sigil_trust_level(false, false), "unverified");
     }
 }

@@ -6,6 +6,51 @@ Versioning follows [AGNOS CalVer](docs/development/versioning.md): `YYYY.M.D`.
 
 ## Unreleased
 
+## 2026.3.13
+
+### Added
+
+#### Phase 6 — Web Interface (Complete)
+- Repository file browser with branch selector, breadcrumb navigation, file/folder icons
+- Code viewer with line numbers, anchor links, raw download, and blame view
+- Blame view with grouped commit annotations and author display
+- Commit log page with paginated history per branch
+- Commit detail page with diff stats, unified diff rendering (colored add/del/context lines)
+- Pull request list page with Open/Closed/All filter tabs and state badges
+- Pull request detail page with Conversation/Diff/Checks tabs, comment form, merge/close buttons
+- User profile page with avatar initial, bot badge, and repository list
+- Repository settings page: general settings, collaborators, branch protection rules, danger zone
+- 13 new route handlers in `web.rs` serving all UI pages
+- Custom `render_diff_html()` parser for unified diff to HTML tables
+- Askama templates with responsive CSS (mobile-friendly)
+
+#### Phase 3 — Code Review AI (Complete)
+- AI-assisted code review summaries via `/ai/review/{number}` endpoint
+- Agent-authored PRs with `is_agent_authored` provenance tracking on PR responses
+- Inline code suggestions with old/new code and explanations
+
+#### Phase 7 — AI-Native Features (Complete)
+- Structured API responses optimized for LLM consumption (`/structured`, `/structured/tree`, `/structured/pulls`)
+- Agent-scoped API tokens with 13 fine-grained permission scopes (`ScopeSet` with wildcard, write-implies-read, admin-implies-all)
+- Full-text code search with FTS5 and porter stemming (`/search`, `/search/index`)
+- AI-generated PR descriptions (`/ai/describe-pr`) and commit summaries (`/ai/summarize-commit/{sha}`)
+- Natural language query interface for repos (`/ai/query`)
+- Database migration `010_search.sql` — FTS5 virtual table for code search
+
+#### AGNOS Integration
+- **Hoosh provider** — added Hoosh (AGNOS LLM gateway) as AI provider option; connects to local gateway on port 8088 with OpenAI-compatible API; API key optional for local use
+- **Daimon registration** — Delta registers 6 capabilities (code-hosting, pull-requests, ci-cd, artifact-registry, code-search, ai-code-review) with the Daimon agent runtime on startup; registration failures are non-fatal
+- **Sigil artifact signing** — added `sign_content()` for ed25519 artifact signing (previously verification only); `sigil_trust_level()` maps verification status to Sigil trust levels (system_core/verified/unverified)
+- **MCP server** — 9 MCP tools exposed at `/v1/mcp/tools` for agnoshi shell integration: `delta_list_repos`, `delta_get_repo`, `delta_list_branches`, `delta_list_pulls`, `delta_get_pull`, `delta_list_pipelines`, `delta_search_code`, `delta_read_file`, `delta_list_tree`
+- **Structured JSON logging** — `--json-log` CLI flag switches tracing output to JSON format compatible with AGNOS journald
+- **AGNOS config section** — `[agnos]` config with `enabled` and `daimon_url` fields
+
+### Changed
+- Version bumped to 2026.3.13
+- `AiConfig` now supports `endpoint` field for custom LLM gateway URLs
+- `AiProvider` enum expanded: `Anthropic`, `OpenAI`, `Hoosh`
+- Roadmap updated: Phases 1–7 and AGNOS integration marked complete
+
 ## 2026.3.11
 
 ### Added

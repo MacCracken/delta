@@ -10,6 +10,7 @@ pub mod forks;
 pub mod git;
 pub mod health;
 pub mod lfs;
+pub mod mcp;
 pub mod oci;
 pub mod pipelines;
 pub mod pulls;
@@ -75,6 +76,8 @@ pub fn router(state: AppState) -> Router {
         .merge(lfs::router())
         // Web UI — /{owner}/{repo}/-/...
         .merge(web::router())
+        // MCP server for agnoshi shell
+        .nest("/v1/mcp", mcp::router())
         // Git smart HTTP — no prefix, matches /{owner}/{name}.git/...
         .merge(git::router())
         .layer(cors)

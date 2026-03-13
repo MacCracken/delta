@@ -16,6 +16,8 @@ pub struct DeltaConfig {
     pub ci: CiConfig,
     #[serde(default)]
     pub ai: AiConfig,
+    #[serde(default)]
+    pub agnos: AgnosConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,6 +143,20 @@ fn default_secrets_key() -> String {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgnosConfig {
+    /// Enable AGNOS integration (daimon registration, etc.)
+    #[serde(default)]
+    pub enabled: bool,
+    /// Daimon agent runtime URL for capability registration.
+    #[serde(default = "default_daimon_url")]
+    pub daimon_url: String,
+}
+
+fn default_daimon_url() -> String {
+    "http://localhost:8090".into()
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AiConfig {
     /// Enable AI-powered features (code review, PR summaries, etc.)
     #[serde(default)]
@@ -157,6 +173,9 @@ pub struct AiConfig {
     /// Maximum tokens in LLM response
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
+    /// Custom endpoint URL (used by Hoosh provider, defaults to http://localhost:8088)
+    #[serde(default)]
+    pub endpoint: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -165,6 +184,7 @@ pub enum AiProvider {
     #[default]
     Anthropic,
     OpenAI,
+    Hoosh,
 }
 
 fn default_model() -> String {
@@ -200,6 +220,7 @@ impl Default for DeltaConfig {
             ssh: SshConfig::default(),
             ci: CiConfig::default(),
             ai: AiConfig::default(),
+            agnos: AgnosConfig::default(),
         }
     }
 }

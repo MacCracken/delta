@@ -2,56 +2,7 @@
 
 Delta is a code hosting platform providing version control, CI/CD, and artifact registry — built for the AGNOS ecosystem.
 
-Phases 1–7 are complete. Only remaining work is listed below.
-
-## Phase 2 — Git Protocol (Remaining)
-
-- [x] Collaborator access control (push permissions beyond owner)
-- [x] SSH transport via built-in SSH server
-- [x] Large file support (LFS-compatible)
-- [x] Shallow clone and partial clone support
-- [x] Repository forking and mirroring
-- [x] Webhook HTTPS-only enforcement (config flag)
-
-## Phase 3 — Code Review (Complete)
-
-- [x] AI-assisted code review summaries
-- [x] Agent-authored PRs with provenance tracking
-- [x] Inline suggestions with one-click apply
-
-## Phase 4 — CI/CD Engine (Complete)
-
-- [x] Sandboxed step execution (Landlock + seccomp on AGNOS)
-- [x] Container-based runners (fallback for non-AGNOS hosts)
-- [x] Log streaming (real-time via WebSocket)
-- [x] Reusable workflow templates
-- [x] Matrix builds (multiple OS/arch/toolchain)
-- [x] Pipeline status badges
-
-## Phase 5 — Artifact Registry (Complete)
-
-- [x] `.ark` package registry (AGNOS native packages)
-- [x] Container image registry (OCI-compatible)
-- [x] Artifact retention policies and cleanup
-- [x] Signed artifacts with ed25519 verification
-- [x] Download statistics and audit trail
-
-## Phase 6 — Web Interface (Complete)
-
-- [x] Repository browser (file tree, blame, history)
-- [x] Commit and diff viewer
-- [x] Pull request UI (conversation, diff, checks)
-- [x] CI/CD dashboard (pipeline list, log viewer with live streaming)
-- [x] User/org profile pages
-- [x] Settings and administration panels
-
-## Phase 7 — AI-Native Features (Complete)
-
-- [x] Structured API responses optimized for LLM consumption
-- [x] Agent-scoped API tokens with fine-grained permissions
-- [x] Code search with semantic indexing
-- [x] AI-generated PR descriptions and commit summaries
-- [x] Natural language query interface for repos
+Phases 1–7 and AGNOS integration are complete. Only remaining work is listed below.
 
 ## Phase 8 — Federation and Privacy
 
@@ -60,7 +11,6 @@ Phases 1–7 are complete. Only remaining work is listed below.
 - [ ] Private instance deployment (single binary, minimal config)
 - [ ] End-to-end encrypted repositories
 - [ ] Audit log export for compliance
-- [ ] AGNOS integration (daimon agent registry, sigil trust chain)
 
 ## Phase 9 — Scale and Hardening
 
@@ -80,13 +30,15 @@ Items below are not planned for any phase. They will be prioritized if there is 
 
 ---
 
-## AGNOS Integration
+## AGNOS Integration (Complete)
 
-- [ ] Takumi recipe for building Delta as an .ark package
-- [ ] MCP server — expose Delta API as MCP tools for agnoshi shell
-- [ ] Hoosh provider — LLM gateway for AI-powered code review
-- [ ] Daimon agent registration on startup
-- [ ] Sigil trust — ed25519 artifact signing
-- [ ] Argonaut service target and dependency declaration
-- [ ] Structured JSON logging for AGNOS journald
-- [ ] `.ark` registry support in artifact storage
+- [x] MCP server — expose Delta API as MCP tools for agnoshi shell
+- [x] Hoosh provider — LLM gateway for AI-powered code review
+- [x] Daimon agent registration on startup
+- [x] Sigil trust — ed25519 artifact signing
+- [x] Structured JSON logging for AGNOS journald
+- [x] `.ark` registry support in artifact storage
+
+Items below are AGNOS-side configuration (not Delta code):
+- Takumi recipe for building Delta as an .ark package
+- Argonaut service target and dependency declaration
