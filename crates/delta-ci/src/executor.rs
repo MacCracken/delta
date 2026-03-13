@@ -3,11 +3,14 @@
 //! Each step's `run` field is executed as a shell command.
 //! Steps run sequentially within a job. Jobs respect `needs` ordering.
 
+use crate::events::PipelineEvent;
 use crate::workflow::{Job, Workflow};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::process::Stdio;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
+use tokio::sync::broadcast;
 
 /// Result of executing a single step.
 #[derive(Debug, Clone)]
@@ -26,17 +29,35 @@ pub struct JobResult {
     pub steps: Vec<StepResult>,
 }
 
+/// How to run a step: native with optional sandbox, or in a container.
+#[derive(Debug, Clone)]
+pub enum SandboxMode {
+    /// Native execution with Landlock + seccomp (Linux only).
+    #[cfg(target_os = "linux")]
+    Landlock,
+    /// Container-based execution.
+    Container {
+        runtime: String,
+        image: String,
+    },
+    /// No sandboxing.
+    None,
+}
+
 /// Execute a single job's steps in order.
 pub async fn execute_job(
     job_name: &str,
     job: &Job,
     work_dir: &Path,
     env_vars: &HashMap<String, String>,
+    job_id: Option<&str>,
+    sender: Option<&broadcast::Sender<PipelineEvent>>,
+    sandbox: &SandboxMode,
 ) -> JobResult {
     let mut steps = Vec::new();
     let mut all_passed = true;
 
-    for step in &job.steps {
+    for (step_idx, step) in job.steps.iter().enumerate() {
         let Some(cmd) = &step.run else {
             continue;
         };
@@ -46,7 +67,29 @@ pub async fn execute_job(
             .clone()
             .unwrap_or_else(|| format!("step-{}", steps.len()));
 
-        let result = run_step(&step_name, cmd, work_dir, env_vars).await;
+        // Emit step started event
+        if let Some(tx) = sender
+            && let Some(jid) = job_id
+        {
+            let _ = tx.send(PipelineEvent::StepStarted {
+                job_id: jid.to_string(),
+                step_name: step_name.clone(),
+                step_index: step_idx,
+            });
+        }
+
+        let result = run_step(&step_name, cmd, work_dir, env_vars, step_idx, job_id, sender, sandbox).await;
+
+        // Emit step completed event
+        if let Some(tx) = sender
+            && let Some(jid) = job_id
+        {
+            let _ = tx.send(PipelineEvent::StepCompleted {
+                job_id: jid.to_string(),
+                step_index: step_idx,
+                exit_code: result.exit_code,
+            });
+        }
 
         if result.exit_code != 0 {
             all_passed = false;
@@ -280,46 +323,174 @@ pub fn expand_workflow_matrices(
 /// Maximum time a single step can run before being killed.
 const STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60); // 30 minutes
 
+/// Build the Command for a step, applying sandbox if configured.
+fn build_step_command(
+    cmd: &str,
+    work_dir: &Path,
+    env_vars: &HashMap<String, String>,
+    sandbox: &SandboxMode,
+) -> Command {
+    match sandbox {
+        SandboxMode::Container { runtime, image } => {
+            crate::container::build_container_command(runtime, image, cmd, work_dir, env_vars)
+        }
+        _ => {
+            let mut command = Command::new("sh");
+            command
+                .arg("-c")
+                .arg(cmd)
+                .current_dir(work_dir)
+                .envs(env_vars)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+
+            // Apply Landlock sandbox on Linux
+            #[cfg(target_os = "linux")]
+            if matches!(sandbox, SandboxMode::Landlock) {
+                let sandbox_work_dir = work_dir.to_path_buf();
+                unsafe {
+                    command.pre_exec(move || {
+                        crate::sandbox::apply_sandbox(&sandbox_work_dir)
+                            .map_err(std::io::Error::other)
+                    });
+                }
+            }
+
+            command
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn run_step(
     name: &str,
     cmd: &str,
     work_dir: &Path,
     env_vars: &HashMap<String, String>,
+    step_index: usize,
+    job_id: Option<&str>,
+    sender: Option<&broadcast::Sender<PipelineEvent>>,
+    sandbox: &SandboxMode,
 ) -> StepResult {
     tracing::info!(step = name, "executing step");
 
-    let output = tokio::time::timeout(
-        STEP_TIMEOUT,
-        Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
-            .current_dir(work_dir)
-            .envs(env_vars)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output(),
-    )
+    let mut command = build_step_command(cmd, work_dir, env_vars, sandbox);
+
+    let mut child = match command.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            return StepResult {
+                name: name.to_string(),
+                exit_code: -1,
+                stdout: String::new(),
+                stderr: format!("failed to execute: {}", e),
+            };
+        }
+    };
+
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
+
+    // Stream stdout and stderr concurrently, sending events for each line
+    let tx = sender.cloned();
+    let jid = job_id.map(|s| s.to_string());
+    let sidx = step_index;
+
+    let stream_result = tokio::time::timeout(STEP_TIMEOUT, async {
+        let mut stdout_reader = stdout_pipe.map(|p| BufReader::new(p).lines());
+        let mut stderr_reader = stderr_pipe.map(|p| BufReader::new(p).lines());
+
+        let mut stdout_done = stdout_reader.is_none();
+        let mut stderr_done = stderr_reader.is_none();
+        let mut out = String::new();
+        let mut err = String::new();
+
+        loop {
+            if stdout_done && stderr_done {
+                break;
+            }
+
+            tokio::select! {
+                line = async {
+                    if let Some(ref mut reader) = stdout_reader {
+                        reader.next_line().await
+                    } else {
+                        std::future::pending().await
+                    }
+                }, if !stdout_done => {
+                    match line {
+                        Ok(Some(l)) => {
+                            if let (Some(tx), Some(jid)) = (&tx, &jid) {
+                                let _ = tx.send(PipelineEvent::StepOutput {
+                                    job_id: jid.clone(),
+                                    step_index: sidx,
+                                    line: l.clone(),
+                                });
+                            }
+                            out.push_str(&l);
+                            out.push('\n');
+                        }
+                        Ok(None) => stdout_done = true,
+                        Err(_) => stdout_done = true,
+                    }
+                }
+                line = async {
+                    if let Some(ref mut reader) = stderr_reader {
+                        reader.next_line().await
+                    } else {
+                        std::future::pending().await
+                    }
+                }, if !stderr_done => {
+                    match line {
+                        Ok(Some(l)) => {
+                            if let (Some(tx), Some(jid)) = (&tx, &jid) {
+                                let _ = tx.send(PipelineEvent::StepOutput {
+                                    job_id: jid.clone(),
+                                    step_index: sidx,
+                                    line: l.clone(),
+                                });
+                            }
+                            err.push_str(&l);
+                            err.push('\n');
+                        }
+                        Ok(None) => stderr_done = true,
+                        Err(_) => stderr_done = true,
+                    }
+                }
+            }
+        }
+
+        let status = child.wait().await;
+        (out, err, status)
+    })
     .await;
 
-    match output {
-        Ok(Ok(out)) => StepResult {
+    match stream_result {
+        Ok((out, err, Ok(status))) => StepResult {
             name: name.to_string(),
-            exit_code: out.status.code().unwrap_or(-1),
-            stdout: String::from_utf8_lossy(&out.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+            exit_code: status.code().unwrap_or(-1),
+            stdout: out,
+            stderr: err,
         },
-        Ok(Err(e)) => StepResult {
-            name: name.to_string(),
-            exit_code: -1,
-            stdout: String::new(),
-            stderr: format!("failed to execute: {}", e),
-        },
-        Err(_) => StepResult {
-            name: name.to_string(),
-            exit_code: -1,
-            stdout: String::new(),
-            stderr: format!("step timed out after {} seconds", STEP_TIMEOUT.as_secs()),
-        },
+        Ok((out, mut err, Err(e))) => {
+            err.push_str(&format!("\nprocess error: {}", e));
+            StepResult {
+                name: name.to_string(),
+                exit_code: -1,
+                stdout: out,
+                stderr: err,
+            }
+        }
+        Err(_) => {
+            // Timeout — kill the child
+            let _ = child.kill().await;
+            StepResult {
+                name: name.to_string(),
+                exit_code: -1,
+                stdout: String::new(),
+                stderr: format!("step timed out after {} seconds", STEP_TIMEOUT.as_secs()),
+            }
+        }
     }
 }
 
@@ -456,7 +627,16 @@ mod tests {
             strategy: None,
         };
 
-        let result = execute_job("test", &job, std::path::Path::new("/tmp"), &HashMap::new()).await;
+        let result = execute_job(
+            "test",
+            &job,
+            std::path::Path::new("/tmp"),
+            &HashMap::new(),
+            None,
+            None,
+            &SandboxMode::None,
+        )
+        .await;
         assert!(result.success);
         assert_eq!(result.steps.len(), 2);
         assert!(result.steps[0].stdout.contains("hello"));
@@ -487,7 +667,16 @@ mod tests {
             strategy: None,
         };
 
-        let result = execute_job("test", &job, std::path::Path::new("/tmp"), &HashMap::new()).await;
+        let result = execute_job(
+            "test",
+            &job,
+            std::path::Path::new("/tmp"),
+            &HashMap::new(),
+            None,
+            None,
+            &SandboxMode::None,
+        )
+        .await;
         assert!(!result.success);
         assert_eq!(result.steps.len(), 1); // Stopped after failure
     }

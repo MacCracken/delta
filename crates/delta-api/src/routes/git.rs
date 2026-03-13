@@ -150,6 +150,8 @@ async fn receive_pack(
     let repo_path_clone = repo_path.clone();
     let secrets_key = state.config.auth.secrets_key.clone();
     let webhooks_https_only = state.config.webhooks.https_only;
+    let pipeline_streams = state.pipeline_streams.clone();
+    let ci_config = state.config.ci.clone();
     tokio::spawn(async move {
         if let Err(e) =
             dispatch_push_webhooks(&db, &owner_clone, &name_clone, &pusher, webhooks_https_only)
@@ -163,6 +165,8 @@ async fn receive_pack(
             &name_clone,
             &repo_path_clone,
             &secrets_key,
+            &pipeline_streams,
+            &ci_config,
         )
         .await
         {
@@ -464,6 +468,8 @@ async fn dispatch_push_pipelines(
     name: &str,
     repo_path: &std::path::Path,
     secrets_key: &str,
+    pipeline_streams: &delta_ci::PipelineStreams,
+    ci_config: &delta_core::config::CiConfig,
 ) -> std::result::Result<(), String> {
     // Resolve repo
     let owner_user = delta_core::db::user::get_by_username(db, owner)
@@ -499,15 +505,66 @@ async fn dispatch_push_pipelines(
         }
     }
 
+    let sandbox = resolve_sandbox_mode(ci_config);
+
     let ctx = delta_ci::runner::PipelineContext {
         pool: db,
         repo_id: &repo_id,
         repo_path,
         commit_sha: &commit_sha,
         secrets: &secrets,
+        streams: Some(pipeline_streams),
+        sandbox,
     };
     delta_ci::runner::run_push_pipelines(&ctx, &branch).await;
     Ok(())
+}
+
+/// Determine the sandbox mode based on CI config and system capabilities.
+fn resolve_sandbox_mode(ci_config: &delta_core::config::CiConfig) -> delta_ci::executor::SandboxMode {
+    use delta_ci::executor::SandboxMode;
+
+    if !ci_config.sandbox_enabled {
+        return SandboxMode::None;
+    }
+
+    // Try Landlock first (Linux only)
+    #[cfg(target_os = "linux")]
+    {
+        if delta_ci::sandbox::landlock_supported() {
+            tracing::info!("CI sandbox: using Landlock + seccomp");
+            return SandboxMode::Landlock;
+        }
+        tracing::warn!("CI sandbox: Landlock not supported by kernel");
+    }
+
+    // Fall back to container runtime
+    match &ci_config.container_runtime {
+        delta_core::config::ContainerRuntime::None => {
+            tracing::warn!("CI sandbox: no sandboxing available");
+            SandboxMode::None
+        }
+        delta_core::config::ContainerRuntime::Auto => {
+            if let Some(runtime) = delta_ci::container::detect_runtime() {
+                tracing::info!("CI sandbox: using container runtime '{}'", runtime);
+                SandboxMode::Container {
+                    runtime,
+                    image: "alpine:latest".to_string(),
+                }
+            } else {
+                tracing::warn!("CI sandbox: no container runtime found, running unsandboxed");
+                SandboxMode::None
+            }
+        }
+        delta_core::config::ContainerRuntime::Podman => SandboxMode::Container {
+            runtime: "podman".to_string(),
+            image: "alpine:latest".to_string(),
+        },
+        delta_core::config::ContainerRuntime::Docker => SandboxMode::Container {
+            runtime: "docker".to_string(),
+            image: "alpine:latest".to_string(),
+        },
+    }
 }
 
 #[cfg(test)]

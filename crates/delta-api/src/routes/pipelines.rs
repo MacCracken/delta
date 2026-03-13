@@ -2,8 +2,9 @@
 
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Path, Query, State, WebSocketUpgrade, ws},
     http::StatusCode,
+    response::IntoResponse,
     routing::get,
 };
 use delta_core::db;
@@ -33,6 +34,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/{owner}/{name}/pipelines/{pipeline_id}/jobs/{job_id}/logs",
             get(get_job_logs),
+        )
+        .route(
+            "/{owner}/{name}/pipelines/{pipeline_id}/ws",
+            get(stream_pipeline_logs),
         )
         .route(
             "/{owner}/{name}/secrets",
@@ -208,6 +213,125 @@ async fn get_job_logs(
             )
         })?;
     Ok(Json(logs))
+}
+
+// --- WebSocket log streaming ---
+
+#[derive(Deserialize)]
+struct WsQuery {
+    token: Option<String>,
+}
+
+async fn stream_pipeline_logs(
+    State(state): State<AppState>,
+    Path((owner, name, pipeline_id)): Path<(String, String, String)>,
+    Query(query): Query<WsQuery>,
+    ws: WebSocketUpgrade,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    // Authenticate via query param token (WebSocket can't send headers from browser)
+    let token = query.token.as_deref().ok_or((
+        StatusCode::UNAUTHORIZED,
+        "missing token query parameter".into(),
+    ))?;
+    let user = crate::auth::authenticate_token(&state.db, token)
+        .await
+        .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid or expired token".into()))?;
+
+    // Verify repo access
+    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
+    let run = db::pipeline::get_pipeline(&state.db, &pipeline_id)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    if run.repo_id != repo.id.to_string() {
+        return Err((StatusCode::NOT_FOUND, "pipeline not found".into()));
+    }
+
+    let streams = state.pipeline_streams.clone();
+    let db = state.db.clone();
+    let pid = pipeline_id.clone();
+
+    Ok(ws.on_upgrade(move |socket| handle_pipeline_ws(socket, streams, db, pid)))
+}
+
+async fn handle_pipeline_ws(
+    mut socket: ws::WebSocket,
+    streams: delta_ci::PipelineStreams,
+    db: sqlx::SqlitePool,
+    pipeline_id: String,
+) {
+    // Try to subscribe to the live broadcast channel
+    if let Some(sender) = streams.get(&pipeline_id) {
+        let mut rx = sender.subscribe();
+        drop(sender); // Release DashMap ref
+
+        loop {
+            tokio::select! {
+                event = rx.recv() => {
+                    match event {
+                        Ok(evt) => {
+                            let json = match serde_json::to_string(&evt) {
+                                Ok(j) => j,
+                                Err(_) => continue,
+                            };
+                            if socket.send(ws::Message::Text(json.into())).await.is_err() {
+                                return; // Client disconnected
+                            }
+                            // If pipeline completed, we're done
+                            if matches!(evt, delta_ci::PipelineEvent::PipelineCompleted { .. }) {
+                                let _ = socket.send(ws::Message::Close(None)).await;
+                                return;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!(pipeline_id = %pipeline_id, "ws client lagged by {} events", n);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            break; // Channel closed, pipeline finished
+                        }
+                    }
+                }
+                msg = socket.recv() => {
+                    match msg {
+                        Some(Ok(ws::Message::Close(_))) | None => return,
+                        _ => {} // Ignore other messages
+                    }
+                }
+            }
+        }
+    }
+
+    // Pipeline already finished (or just finished) — send historical logs from DB
+    let jobs = db::pipeline::list_jobs(&db, &pipeline_id).await.unwrap_or_default();
+    for job in &jobs {
+        let logs = db::pipeline::get_step_logs(&db, &job.id).await.unwrap_or_default();
+        for log in &logs {
+            let evt = serde_json::json!({
+                "type": "step_output",
+                "job_id": job.id,
+                "step_index": log.step_index,
+                "line": log.output,
+            });
+            if let Ok(json) = serde_json::to_string(&evt)
+                && socket.send(ws::Message::Text(json.into())).await.is_err()
+            {
+                return;
+            }
+        }
+    }
+
+    // Send pipeline completed
+    let run = db::pipeline::get_pipeline(&db, &pipeline_id).await;
+    let status = run
+        .map(|r| format!("{:?}", r.status).to_lowercase())
+        .unwrap_or_else(|_| "unknown".into());
+    let evt = serde_json::json!({
+        "type": "pipeline_completed",
+        "status": status,
+    });
+    if let Ok(json) = serde_json::to_string(&evt) {
+        let _ = socket.send(ws::Message::Text(json.into())).await;
+    }
+    let _ = socket.send(ws::Message::Close(None)).await;
 }
 
 // --- Secrets ---

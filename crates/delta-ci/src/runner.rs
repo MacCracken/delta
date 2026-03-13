@@ -3,13 +3,15 @@
 //! Connects the workflow parser, trigger system, executor, and database
 //! to run pipelines triggered by repository events.
 
-use crate::executor::{execute_job, expand_workflow_matrices};
+use crate::events::{PipelineEvent, PipelineStreams};
+use crate::executor::{SandboxMode, execute_job, expand_workflow_matrices};
 use crate::parser::load_workflows;
 use crate::trigger::{self, Event};
 use delta_core::db;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::path::Path;
+use tokio::sync::broadcast;
 
 /// Context for running pipelines against a repository.
 pub struct PipelineContext<'a> {
@@ -18,6 +20,8 @@ pub struct PipelineContext<'a> {
     pub repo_path: &'a Path,
     pub commit_sha: &'a str,
     pub secrets: &'a HashMap<String, String>,
+    pub streams: Option<&'a PipelineStreams>,
+    pub sandbox: SandboxMode,
 }
 
 /// Run all matching workflows for a push event.
@@ -72,6 +76,12 @@ async fn run_pipelines(
             }
         };
 
+        // Set up broadcast channel for this pipeline
+        let (tx, _) = broadcast::channel::<PipelineEvent>(256);
+        if let Some(streams) = ctx.streams {
+            streams.insert(pipeline.id.clone(), tx.clone());
+        }
+
         // Expand matrix jobs and resolve execution order
         let (expanded_jobs, job_order) = match expand_workflow_matrices(workflow) {
             Ok(result) => result,
@@ -85,6 +95,12 @@ async fn run_pipelines(
                 .await
                 {
                     tracing::error!(pipeline_id = %pipeline.id, "failed to mark pipeline as failed: {}", e);
+                }
+                let _ = tx.send(PipelineEvent::PipelineCompleted {
+                    status: "failed".to_string(),
+                });
+                if let Some(streams) = ctx.streams {
+                    streams.remove(&pipeline.id);
                 }
                 continue;
             }
@@ -134,6 +150,12 @@ async fn run_pipelines(
                 }
             };
 
+            // Emit job started event
+            let _ = tx.send(PipelineEvent::JobStarted {
+                job_name: expanded.display_name.clone(),
+                job_id: job_run.id.clone(),
+            });
+
             // Mark job as running
             if let Err(e) = db::pipeline::update_job_status(
                 ctx.pool,
@@ -152,12 +174,18 @@ async fn run_pipelines(
                 job_env.insert(format!("MATRIX_{}", dim.to_uppercase()), val.clone());
             }
 
-            // Execute the job
+            // Determine sandbox mode for this job
+            let job_sandbox = resolve_job_sandbox(&ctx.sandbox, expanded.job.runs_on.as_deref());
+
+            // Execute the job with streaming
             let result = execute_job(
                 &expanded.display_name,
                 &expanded.job,
                 ctx.repo_path,
                 &job_env,
+                Some(&job_run.id),
+                Some(&tx),
+                &job_sandbox,
             )
             .await;
 
@@ -232,6 +260,14 @@ async fn run_pipelines(
                 let code = result.steps.last().map(|s| s.exit_code).unwrap_or(-1);
                 (db::pipeline::RunStatus::Failed, Some(code))
             };
+
+            // Emit job completed event
+            let _ = tx.send(PipelineEvent::JobCompleted {
+                job_id: job_run.id.clone(),
+                success: result.success,
+                exit_code,
+            });
+
             if let Err(e) =
                 db::pipeline::update_job_status(ctx.pool, &job_run.id, status, exit_code).await
             {
@@ -256,6 +292,17 @@ async fn run_pipelines(
         } else {
             db::pipeline::RunStatus::Failed
         };
+
+        // Emit pipeline completed event
+        let _ = tx.send(PipelineEvent::PipelineCompleted {
+            status: format!("{:?}", final_status).to_lowercase(),
+        });
+
+        // Remove broadcast channel from registry
+        if let Some(streams) = ctx.streams {
+            streams.remove(&pipeline.id);
+        }
+
         if let Err(e) =
             db::pipeline::update_pipeline_status(ctx.pool, &pipeline.id, final_status).await
         {
@@ -269,4 +316,24 @@ async fn run_pipelines(
             "pipeline complete"
         );
     }
+}
+
+/// Resolve the sandbox mode for a specific job, considering the runs_on field.
+fn resolve_job_sandbox(base: &SandboxMode, runs_on: Option<&str>) -> SandboxMode {
+    // If runs_on specifies a container image, use container mode
+    if let Some(runs_on) = runs_on
+        && let Some(image) = runs_on.strip_prefix("docker://")
+    {
+        if let Some(runtime) = crate::container::detect_runtime() {
+            return SandboxMode::Container {
+                runtime,
+                image: image.to_string(),
+            };
+        }
+        tracing::warn!(
+            "runs_on specifies container image '{}' but no container runtime found",
+            runs_on
+        );
+    }
+    base.clone()
 }

@@ -12,6 +12,8 @@ pub struct DeltaConfig {
     pub webhooks: WebhookConfig,
     #[serde(default)]
     pub ssh: SshConfig,
+    #[serde(default)]
+    pub ci: CiConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +95,41 @@ impl Default for SshConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CiConfig {
+    /// Enable sandboxed step execution (Landlock + seccomp on Linux).
+    #[serde(default = "default_sandbox_enabled")]
+    pub sandbox_enabled: bool,
+    /// Container runtime to use when kernel sandboxing is unavailable.
+    #[serde(default)]
+    pub container_runtime: ContainerRuntime,
+}
+
+impl Default for CiConfig {
+    fn default() -> Self {
+        Self {
+            sandbox_enabled: true,
+            container_runtime: ContainerRuntime::Auto,
+        }
+    }
+}
+
+fn default_sandbox_enabled() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ContainerRuntime {
+    /// Automatically detect podman or docker.
+    #[default]
+    Auto,
+    Podman,
+    Docker,
+    /// Disable container fallback.
+    None,
+}
+
 fn default_ssh_port() -> u16 {
     2222
 }
@@ -124,6 +161,7 @@ impl Default for DeltaConfig {
             registry: RegistryConfig::default(),
             webhooks: WebhookConfig::default(),
             ssh: SshConfig::default(),
+            ci: CiConfig::default(),
         }
     }
 }

@@ -1,3 +1,4 @@
+use delta_ci::PipelineStreams;
 use delta_core::DeltaConfig;
 use delta_registry::{BlobStore, LfsStore};
 use delta_vcs::RepoHost;
@@ -12,6 +13,7 @@ pub struct AppState {
     pub blob_store: Arc<BlobStore>,
     pub lfs_store: Arc<LfsStore>,
     pub db: SqlitePool,
+    pub pipeline_streams: PipelineStreams,
 }
 
 impl AppState {
@@ -25,6 +27,7 @@ impl AppState {
             blob_store: Arc::new(blob_store),
             lfs_store: Arc::new(lfs_store),
             db,
+            pipeline_streams: delta_ci::new_pipeline_streams(),
         }
     }
 }
