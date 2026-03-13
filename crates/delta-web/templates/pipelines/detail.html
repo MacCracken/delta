@@ -1,0 +1,294 @@
+{% extends "layout.html" %}
+
+{% block title %}Pipeline #{{ pipeline.id|truncate_sha }} - {{ owner }}/{{ repo }} - Delta{% endblock %}
+
+{% block nav %}
+<nav>
+  <a href="/{{ owner }}/{{ repo }}">Code</a>
+  <a href="/{{ owner }}/{{ repo }}/-/pipelines" class="active">Pipelines</a>
+</nav>
+{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb">
+  <a href="/{{ owner }}">{{ owner }}</a>
+  <span class="sep">/</span>
+  <a href="/{{ owner }}/{{ repo }}">{{ repo }}</a>
+  <span class="sep">/</span>
+  <a href="/{{ owner }}/{{ repo }}/-/pipelines">Pipelines</a>
+  <span class="sep">/</span>
+  #{{ pipeline.id|truncate_sha }}
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>
+    <span class="status status-{{ pipeline.status.as_str() }}">
+      <span class="status-dot"></span>
+      {{ pipeline.status.as_str() }}
+    </span>
+    {{ pipeline.workflow_name }}
+  </h1>
+  <span id="ws-status" class="ws-status ws-disconnected">disconnected</span>
+</div>
+
+<div class="pipeline-meta">
+  <div class="meta-item">
+    <div class="meta-label">Commit</div>
+    <span class="sha">{{ pipeline.commit_sha|truncate_sha }}</span>
+  </div>
+  <div class="meta-item">
+    <div class="meta-label">Trigger</div>
+    {{ pipeline.trigger_type }}{% match pipeline.trigger_ref %}{% when Some with (r) %} ({{ r }}){% when None %}{% endmatch %}
+  </div>
+  <div class="meta-item">
+    <div class="meta-label">Created</div>
+    <span class="time-ago">{{ pipeline.created_at }}</span>
+  </div>
+  <div class="meta-item">
+    <div class="meta-label">Duration</div>
+    <span class="time-ago">{{ pipeline|pipeline_duration }}</span>
+  </div>
+</div>
+
+<h2 style="font-size: 16px; margin-bottom: 12px;">Jobs</h2>
+
+{% if jobs.is_empty() %}
+<div class="empty-state">
+  <p>No jobs recorded for this pipeline.</p>
+</div>
+{% else %}
+<div class="job-list" id="job-list">
+  {% for job in jobs %}
+  <div class="job-card" data-job-id="{{ job.job.id }}">
+    <div class="job-header" onclick="toggleJob('{{ job.job.id }}')">
+      <h3>
+        <span class="status status-{{ job.job.status.as_str() }}">
+          <span class="status-dot"></span>
+        </span>
+        {{ job.job.job_name }}
+        {% match job.job.exit_code %}{% when Some with (c) %}<span class="exit-code">exit {{ c }}</span>{% when None %}{% endmatch %}
+      </h3>
+      <span class="chevron" id="chevron-{{ job.job.id }}">&#9654;</span>
+    </div>
+    <div class="job-body collapsed" id="job-body-{{ job.job.id }}">
+      {% if job.steps.is_empty() %}
+      <div class="log-viewer" id="log-{{ job.job.id }}"><span class="log-line" style="color: var(--text-muted);">Waiting for output...</span></div>
+      {% else %}
+        {% for step in job.steps %}
+        <div class="step-header">
+          <span class="status status-{{ step.status }}"><span class="status-dot"></span></span>
+          {{ step.step_name }}
+        </div>
+        <div class="log-viewer">{%- for line in step.output.lines() -%}<span class="log-line"><span class="line-num">{{ loop.index }}</span>{{ line }}</span>
+{%- endfor -%}</div>
+        {% endfor %}
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleJob(jobId) {
+  const body = document.getElementById('job-body-' + jobId);
+  const chevron = document.getElementById('chevron-' + jobId);
+  if (body.classList.contains('collapsed')) {
+    body.classList.remove('collapsed');
+    chevron.classList.add('open');
+  } else {
+    body.classList.add('collapsed');
+    chevron.classList.remove('open');
+  }
+}
+
+// Auto-expand failed or running jobs
+document.querySelectorAll('.job-card').forEach(card => {
+  const header = card.querySelector('.job-header .status');
+  if (header && (header.classList.contains('status-failed') || header.classList.contains('status-running'))) {
+    const jobId = card.dataset.jobId;
+    toggleJob(jobId);
+  }
+});
+
+// WebSocket live streaming
+const pipelineId = "{{ pipeline.id }}";
+const wsStatus = document.getElementById('ws-status');
+const isTerminal = ["passed", "failed", "cancelled"].includes("{{ pipeline.status.as_str() }}");
+
+function connectWs() {
+  if (isTerminal) {
+    wsStatus.textContent = 'complete';
+    wsStatus.className = 'ws-status ws-connected';
+    return;
+  }
+
+  wsStatus.textContent = 'connecting...';
+  wsStatus.className = 'ws-status ws-connecting';
+
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  // Use cookie or localStorage token — adjust based on your auth flow
+  const token = localStorage.getItem('delta_token') || '';
+  const wsUrl = proto + '//' + location.host + '/api/v1/repos/{{ owner }}/{{ repo }}/pipelines/' + pipelineId + '/ws?token=' + encodeURIComponent(token);
+  const ws = new WebSocket(wsUrl);
+
+  ws.onopen = function() {
+    wsStatus.textContent = 'live';
+    wsStatus.className = 'ws-status ws-connected';
+  };
+
+  ws.onmessage = function(event) {
+    const data = JSON.parse(event.data);
+    handleEvent(data);
+  };
+
+  ws.onclose = function() {
+    wsStatus.textContent = 'disconnected';
+    wsStatus.className = 'ws-status ws-disconnected';
+  };
+
+  ws.onerror = function() {
+    wsStatus.textContent = 'error';
+    wsStatus.className = 'ws-status ws-disconnected';
+  };
+}
+
+function handleEvent(evt) {
+  switch (evt.type) {
+    case 'job_started':
+      updateJobStatus(evt.job_id, 'running');
+      ensureJobCard(evt.job_id, evt.job_name);
+      break;
+    case 'step_started':
+      addStepHeader(evt.job_id, evt.step_name, evt.step_index);
+      break;
+    case 'step_output':
+      appendLogLine(evt.job_id, evt.step_index, evt.line);
+      break;
+    case 'step_completed':
+      updateStepStatus(evt.job_id, evt.step_index, evt.exit_code);
+      break;
+    case 'job_completed':
+      updateJobStatus(evt.job_id, evt.success ? 'passed' : 'failed', evt.exit_code);
+      break;
+    case 'pipeline_completed':
+      updatePipelineStatus(evt.status);
+      wsStatus.textContent = 'complete';
+      break;
+  }
+}
+
+function ensureJobCard(jobId, jobName) {
+  if (document.querySelector('[data-job-id="' + jobId + '"]')) return;
+  const list = document.getElementById('job-list');
+  if (!list) return;
+  const card = document.createElement('div');
+  card.className = 'job-card';
+  card.dataset.jobId = jobId;
+  card.innerHTML =
+    '<div class="job-header" onclick="toggleJob(\'' + jobId + '\')">' +
+      '<h3><span class="status status-running"><span class="status-dot"></span></span> ' + escapeHtml(jobName) + '</h3>' +
+      '<span class="chevron open" id="chevron-' + jobId + '">&#9654;</span>' +
+    '</div>' +
+    '<div class="job-body" id="job-body-' + jobId + '">' +
+      '<div class="log-viewer" id="log-' + jobId + '"></div>' +
+    '</div>';
+  list.appendChild(card);
+}
+
+function addStepHeader(jobId, stepName, stepIndex) {
+  const body = document.getElementById('job-body-' + jobId);
+  if (!body) return;
+  // Remove "waiting" placeholder
+  const placeholder = body.querySelector('.log-line[style]');
+  if (placeholder) placeholder.parentElement.innerHTML = '';
+
+  const header = document.createElement('div');
+  header.className = 'step-header';
+  header.id = 'step-header-' + jobId + '-' + stepIndex;
+  header.innerHTML = '<span class="status status-running"><span class="status-dot"></span></span> ' + escapeHtml(stepName);
+  body.appendChild(header);
+
+  const viewer = document.createElement('div');
+  viewer.className = 'log-viewer';
+  viewer.id = 'step-log-' + jobId + '-' + stepIndex;
+  body.appendChild(viewer);
+}
+
+let lineCounters = {};
+
+function appendLogLine(jobId, stepIndex, line) {
+  const key = jobId + '-' + stepIndex;
+  let viewer = document.getElementById('step-log-' + key);
+  if (!viewer) {
+    // Fallback to job-level log
+    viewer = document.getElementById('log-' + jobId);
+  }
+  if (!viewer) return;
+
+  if (!lineCounters[key]) lineCounters[key] = 0;
+  lineCounters[key]++;
+
+  const span = document.createElement('span');
+  span.className = 'log-line';
+  span.innerHTML = '<span class="line-num">' + lineCounters[key] + '</span>' + escapeHtml(line);
+  viewer.appendChild(span);
+  viewer.appendChild(document.createTextNode('\n'));
+  viewer.scrollTop = viewer.scrollHeight;
+}
+
+function updateStepStatus(jobId, stepIndex, exitCode) {
+  const header = document.getElementById('step-header-' + jobId + '-' + stepIndex);
+  if (!header) return;
+  const status = header.querySelector('.status');
+  if (status) {
+    const cls = exitCode === 0 ? 'passed' : 'failed';
+    status.className = 'status status-' + cls;
+  }
+}
+
+function updateJobStatus(jobId, status, exitCode) {
+  const card = document.querySelector('[data-job-id="' + jobId + '"]');
+  if (!card) return;
+  const statusEl = card.querySelector('.job-header .status');
+  if (statusEl) {
+    statusEl.className = 'status status-' + status;
+  }
+  if (exitCode !== undefined && exitCode !== null) {
+    const h3 = card.querySelector('.job-header h3');
+    let ec = h3.querySelector('.exit-code');
+    if (!ec) {
+      ec = document.createElement('span');
+      ec.className = 'exit-code';
+      h3.appendChild(ec);
+    }
+    ec.textContent = 'exit ' + exitCode;
+  }
+}
+
+function updatePipelineStatus(status) {
+  const el = document.querySelector('.page-header .status');
+  if (el) {
+    el.className = 'status status-' + status;
+    const dot = el.querySelector('.status-dot');
+    if (dot) dot.className = 'status-dot';
+    // Update text node
+    el.childNodes.forEach(n => {
+      if (n.nodeType === 3 && n.textContent.trim()) n.textContent = '\n          ' + status + '\n        ';
+    });
+  }
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+connectWs();
+</script>
+{% endblock %}

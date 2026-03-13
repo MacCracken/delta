@@ -16,6 +16,7 @@ pub mod repos;
 pub mod signing;
 pub mod ssh_keys;
 pub mod status_checks;
+pub mod web;
 pub mod webhooks;
 
 use crate::state::AppState;
@@ -70,6 +71,8 @@ pub fn router(state: AppState) -> Router {
         .merge(oci::router())
         // Git LFS — /{owner}/{name}.git/info/lfs/...
         .merge(lfs::router())
+        // Web UI — /{owner}/{repo}/-/...
+        .merge(web::router())
         // Git smart HTTP — no prefix, matches /{owner}/{name}.git/...
         .merge(git::router())
         .layer(cors)

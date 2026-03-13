@@ -74,6 +74,9 @@ dashmap = "6"
 landlock = "0.4"
 libc = "0.2"
 
+# Templating
+askama = "0.13"
+
 # Testing
 tempfile = "3"
 
