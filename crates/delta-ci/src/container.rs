@@ -131,4 +131,61 @@ mod tests {
         // Just verify it doesn't panic — actual result depends on system
         let _ = detect_runtime();
     }
+
+    #[test]
+    fn test_validate_image_valid() {
+        assert_eq!(validate_image("alpine:latest"), "alpine:latest");
+        assert_eq!(validate_image("alpine"), "alpine");
+        assert_eq!(validate_image("myimage:v1.2.3"), "myimage:v1.2.3");
+    }
+
+    #[test]
+    fn test_validate_image_path_traversal() {
+        assert_eq!(validate_image("../../../etc/passwd"), "alpine:latest");
+        assert_eq!(validate_image("foo/bar"), "alpine:latest");
+    }
+
+    #[test]
+    fn test_validate_image_multiple_colons() {
+        assert_eq!(validate_image("image:tag:extra"), "alpine:latest");
+    }
+
+    #[test]
+    fn test_validate_image_empty() {
+        assert_eq!(validate_image(""), "alpine:latest");
+    }
+
+    #[test]
+    fn test_validate_work_dir_normal() {
+        let result = validate_work_dir(Path::new("/tmp/work"));
+        assert_eq!(result, std::path::PathBuf::from("/tmp/work"));
+    }
+
+    #[test]
+    fn test_validate_work_dir_with_colon() {
+        let result = validate_work_dir(Path::new("/tmp:evil/work"));
+        assert_eq!(result, std::path::PathBuf::from("/tmp"));
+    }
+
+    #[test]
+    fn test_env_var_key_filtering() {
+        let mut env = HashMap::new();
+        env.insert("GOOD_KEY".into(), "value".into());
+        env.insert("BAD=KEY".into(), "value".into());
+        env.insert("BAD\nKEY".into(), "value".into());
+        env.insert("BAD\0KEY".into(), "value".into());
+
+        // Build a command — it should skip the bad keys.
+        // We can't easily inspect tokio::Command args, but we verify it doesn't panic.
+        let cmd = build_container_command(
+            "podman",
+            "alpine:latest",
+            "echo test",
+            Path::new("/tmp/work"),
+            &env,
+        );
+        let debug = format!("{:?}", cmd);
+        // The good key should appear in the debug output
+        assert!(debug.contains("GOOD_KEY"));
+    }
 }

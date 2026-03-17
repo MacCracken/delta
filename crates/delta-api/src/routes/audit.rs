@@ -179,3 +179,77 @@ fn csv_escape(s: &str) -> String {
         safe
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_csv_escape_plain() {
+        assert_eq!(csv_escape("hello"), "hello");
+    }
+
+    #[test]
+    fn test_csv_escape_with_comma() {
+        assert_eq!(csv_escape("a,b"), "\"a,b\"");
+    }
+
+    #[test]
+    fn test_csv_escape_with_quotes() {
+        assert_eq!(csv_escape(r#"say "hi""#), r#""say ""hi""""#);
+    }
+
+    #[test]
+    fn test_csv_escape_formula_equals() {
+        let result = csv_escape("=1+1");
+        assert!(
+            result.starts_with("'="),
+            "should prefix with quote: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_csv_escape_formula_plus() {
+        let result = csv_escape("+1+1");
+        assert!(
+            result.starts_with("'+"),
+            "should prefix with quote: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_csv_escape_formula_minus() {
+        let result = csv_escape("-1+1");
+        assert!(
+            result.starts_with("'-"),
+            "should prefix with quote: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_csv_escape_formula_at() {
+        let result = csv_escape("@SUM(A1)");
+        assert!(
+            result.starts_with("'@"),
+            "should prefix with quote: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_csv_escape_formula_with_comma() {
+        // Formula prefix + comma should get both treatments
+        let result = csv_escape("=cmd,arg");
+        assert!(result.starts_with("\"'="), "got: {}", result);
+    }
+
+    #[test]
+    fn test_csv_escape_newline() {
+        let result = csv_escape("line1\nline2");
+        assert!(result.starts_with('"'));
+        assert!(result.ends_with('"'));
+    }
+}

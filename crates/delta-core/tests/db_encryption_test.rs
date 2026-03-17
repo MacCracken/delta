@@ -126,7 +126,7 @@ async fn test_encryption_set_repo_encrypted() {
         .unwrap();
 
     let encrypted: bool = sqlx::query_scalar("SELECT encrypted FROM repositories WHERE id = ?")
-        .bind(&repo.id.to_string())
+        .bind(repo.id.to_string())
         .fetch_one(&pool)
         .await
         .unwrap();

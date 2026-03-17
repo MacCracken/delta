@@ -217,8 +217,8 @@ async fn test_list_expired() {
          VALUES (?, ?, ?, 'expired-ws', 'ws/exp/test', 'main', 'abc', 'active', 1, ?, ?, ?)",
     )
     .bind(&id)
-    .bind(&repo.id.to_string())
-    .bind(&user.id.to_string())
+    .bind(repo.id.to_string())
+    .bind(user.id.to_string())
     .bind(&past)
     .bind(&now)
     .bind(&now)

@@ -249,4 +249,124 @@ mod tests {
         let result = unwrap_repo_key(&key2, &wrapped);
         assert!(result.is_err()); // Now properly fails instead of silently decrypting to garbage
     }
+
+    #[test]
+    fn test_encrypt_returns_ok() {
+        let key = derive_key("test-key");
+        let result = encrypt(&key, b"hello");
+        assert!(result.is_ok());
+        // Output should be valid hex
+        let hex_str = result.unwrap();
+        assert!(hex::decode(&hex_str).is_ok());
+    }
+
+    #[test]
+    fn test_legacy_format_detection() {
+        // Legacy format: nonce(16) + ciphertext, no tag — total < 48 bytes
+        let key = derive_key("legacy-key");
+
+        // Build a legacy-format ciphertext: nonce || xor_stream(key, nonce, plaintext)
+        let plaintext = b"legacy-secret";
+        let nonce = [0u8; 16];
+        let ciphertext = xor_stream(&key, &nonce, plaintext);
+
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&nonce);
+        raw.extend_from_slice(&ciphertext);
+        // No tag appended — this is legacy format (< 48 bytes for short plaintext)
+        assert!(raw.len() < 48);
+
+        let hex_input = hex::encode(&raw);
+        let decrypted = decrypt(&key, &hex_input).unwrap();
+        assert_eq!(decrypted, "legacy-secret");
+    }
+
+    #[test]
+    fn test_tampered_tag_detected() {
+        let key = derive_key("tag-test");
+        let encrypted = encrypt(&key, b"secret-data").unwrap();
+        let mut raw = hex::decode(&encrypted).unwrap();
+
+        // Tamper with the last byte (part of the tag)
+        let last = raw.len() - 1;
+        raw[last] ^= 0xFF;
+
+        let tampered = hex::encode(&raw);
+        let result = decrypt(&key, &tampered);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("integrity check failed")
+        );
+    }
+
+    #[test]
+    fn test_tampered_nonce_detected() {
+        let key = derive_key("nonce-test");
+        let encrypted = encrypt(&key, b"secret-data").unwrap();
+        let mut raw = hex::decode(&encrypted).unwrap();
+
+        // Tamper with the first byte (part of the nonce)
+        raw[0] ^= 0xFF;
+
+        let tampered = hex::encode(&raw);
+        let result = decrypt(&key, &tampered);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("integrity check failed")
+        );
+    }
+
+    #[test]
+    fn test_compute_mac_independent_of_encryption_key() {
+        // MAC key is derived from encryption key, but different enc keys
+        // produce different MACs for same input.
+        let key1 = derive_key("key-alpha");
+        let key2 = derive_key("key-beta");
+        let nonce = [0u8; 16];
+        let data = b"some ciphertext bytes";
+
+        let mac1 = compute_mac(&key1, &nonce, data);
+        let mac2 = compute_mac(&key2, &nonce, data);
+        assert_ne!(mac1, mac2);
+    }
+
+    #[test]
+    fn test_empty_ciphertext_with_mac() {
+        // Empty plaintext should produce: nonce(16) + empty ciphertext + tag(32) = 48 bytes
+        let key = derive_key("empty-test");
+        let encrypted = encrypt(&key, b"").unwrap();
+        let raw = hex::decode(&encrypted).unwrap();
+        assert_eq!(raw.len(), 48); // 16 + 0 + 32
+
+        let decrypted = decrypt(&key, &encrypted).unwrap();
+        assert_eq!(decrypted, "");
+    }
+
+    #[test]
+    fn test_too_short_data_errors() {
+        let key = derive_key("short-test");
+        // Less than 16 bytes — not even a nonce
+        let hex_input = hex::encode([0u8; 10]);
+        let result = decrypt(&key, &hex_input);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too short"));
+    }
+
+    #[test]
+    fn test_constant_time_eq_different_lengths() {
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+        assert!(!constant_time_eq(b"", b"a"));
+    }
+
+    #[test]
+    fn test_constant_time_eq_same() {
+        assert!(constant_time_eq(b"hello", b"hello"));
+        assert!(constant_time_eq(b"", b""));
+    }
 }

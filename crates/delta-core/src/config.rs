@@ -431,4 +431,90 @@ token_expiry_secs = 86400
         let config: DeltaConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.auth.secrets_key, "delta-change-me-in-production");
     }
+
+    #[test]
+    fn test_ci_config_with_runner_token() {
+        let toml_str = r#"
+[server]
+host = "127.0.0.1"
+port = 8070
+api_prefix = "/api/v1"
+
+[storage]
+repos_dir = "/tmp/repos"
+artifacts_dir = "/tmp/artifacts"
+db_url = "sqlite:///tmp/test.db"
+
+[auth]
+enabled = true
+token_expiry_secs = 86400
+
+[ci]
+sandbox_enabled = false
+runner_token = "super-secret-runner-token"
+"#;
+        let config: DeltaConfig = toml::from_str(toml_str).unwrap();
+        assert!(!config.ci.sandbox_enabled);
+        assert_eq!(
+            config.ci.runner_token.as_deref(),
+            Some("super-secret-runner-token")
+        );
+    }
+
+    #[test]
+    fn test_ci_config_defaults_no_runner_token() {
+        let toml_str = r#"
+[server]
+host = "127.0.0.1"
+port = 8070
+api_prefix = "/api/v1"
+
+[storage]
+repos_dir = "/tmp/repos"
+artifacts_dir = "/tmp/artifacts"
+db_url = "sqlite:///tmp/test.db"
+
+[auth]
+enabled = true
+token_expiry_secs = 86400
+"#;
+        let config: DeltaConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.ci.sandbox_enabled); // default true
+        assert!(config.ci.runner_token.is_none());
+    }
+
+    #[test]
+    fn test_ci_config_container_runtime_variants() {
+        for (input, _) in [
+            ("auto", "auto"),
+            ("podman", "podman"),
+            ("docker", "docker"),
+            ("none", "none"),
+        ] {
+            let toml_str = format!(
+                r#"
+[server]
+host = "127.0.0.1"
+port = 8070
+api_prefix = "/api/v1"
+
+[storage]
+repos_dir = "/tmp/repos"
+artifacts_dir = "/tmp/artifacts"
+db_url = "sqlite:///tmp/test.db"
+
+[auth]
+enabled = true
+token_expiry_secs = 86400
+
+[ci]
+container_runtime = "{}"
+"#,
+                input
+            );
+            let config: DeltaConfig = toml::from_str(&toml_str).unwrap();
+            // Just verify it deserializes without error
+            let _ = format!("{:?}", config.ci.container_runtime);
+        }
+    }
 }

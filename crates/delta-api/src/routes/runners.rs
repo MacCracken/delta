@@ -715,3 +715,54 @@ async fn finalize_pipeline_if_done(
     }
     streams.remove(pipeline_id);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_truncate_output_under_limit() {
+        let s = "hello world";
+        let result = truncate_output(s);
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn test_truncate_output_exact_limit() {
+        let s = "a".repeat(MAX_STEP_LOG_SIZE);
+        let result = truncate_output(&s);
+        assert_eq!(result, s); // Exactly at limit, no truncation
+    }
+
+    #[test]
+    fn test_truncate_output_over_limit_ascii() {
+        let s = "a".repeat(MAX_STEP_LOG_SIZE + 100);
+        let result = truncate_output(&s);
+        assert!(result.len() < s.len());
+        assert!(result.ends_with("... [output truncated at 1 MB]"));
+        // The truncated content should be MAX_STEP_LOG_SIZE bytes of 'a's
+        assert!(result.starts_with(&"a".repeat(MAX_STEP_LOG_SIZE)));
+    }
+
+    #[test]
+    fn test_truncate_output_multibyte_utf8_at_boundary() {
+        // Build a string where the MAX_STEP_LOG_SIZE boundary falls in the
+        // middle of a multi-byte character.
+        // U+00E9 (e-acute) is 2 bytes in UTF-8: 0xC3 0xA9
+        let prefix_len = MAX_STEP_LOG_SIZE - 1; // one byte short of limit
+        let mut s = "a".repeat(prefix_len);
+        s.push('\u{00E9}'); // 2 bytes — crosses the boundary
+        s.push_str("extra");
+
+        let result = truncate_output(&s);
+        assert!(result.ends_with("... [output truncated at 1 MB]"));
+        // Should not panic or produce invalid UTF-8
+        // The truncation should have backed up to not split the character
+    }
+
+    #[test]
+    fn test_truncate_output_empty() {
+        let result = truncate_output("");
+        assert_eq!(result, "");
+    }
+}

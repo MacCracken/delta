@@ -206,4 +206,97 @@ mod tests {
         assert_eq!(deserialized.queue_id, "q1");
         assert_eq!(deserialized.steps.len(), 1);
     }
+
+    #[test]
+    fn test_parse_self_hosted_extra_whitespace() {
+        let labels = parse_self_hosted(Some("  self-hosted  ,  linux  ,  gpu  ")).unwrap();
+        assert_eq!(labels, vec!["linux", "gpu"]);
+    }
+
+    #[test]
+    fn test_parse_self_hosted_trailing_comma() {
+        let labels = parse_self_hosted(Some("self-hosted,linux,")).unwrap();
+        assert_eq!(labels, vec!["linux"]);
+    }
+
+    #[test]
+    fn test_parse_self_hosted_only_commas() {
+        let labels = parse_self_hosted(Some("self-hosted,,,,")).unwrap();
+        assert!(labels.is_empty());
+    }
+
+    #[test]
+    fn test_build_payload_empty_steps() {
+        let job = Job {
+            name: Some("Empty".into()),
+            runs_on: Some("self-hosted".into()),
+            needs: vec![],
+            steps: vec![],
+            uses: None,
+            with: HashMap::new(),
+            strategy: None,
+        };
+
+        let env = HashMap::new();
+        let payload = build_payload("q1", "j1", "p1", "r1", "empty", &job, &env, "sha1");
+        assert!(payload.steps.is_empty());
+    }
+
+    #[test]
+    fn test_build_payload_steps_without_run_skipped() {
+        let job = Job {
+            name: Some("Mixed".into()),
+            runs_on: Some("self-hosted".into()),
+            needs: vec![],
+            steps: vec![
+                Step {
+                    name: Some("uses-only".into()),
+                    run: None,
+                    uses: Some("some/action".into()),
+                    with: HashMap::new(),
+                },
+                Step {
+                    name: Some("has-run".into()),
+                    run: Some("echo ok".into()),
+                    uses: None,
+                    with: HashMap::new(),
+                },
+            ],
+            uses: None,
+            with: HashMap::new(),
+            strategy: None,
+        };
+
+        let payload = build_payload(
+            "q1",
+            "j1",
+            "p1",
+            "r1",
+            "mixed",
+            &job,
+            &HashMap::new(),
+            "sha",
+        );
+        assert_eq!(payload.steps.len(), 1);
+        assert_eq!(payload.steps[0].name, "has-run");
+    }
+
+    #[test]
+    fn test_job_payload_empty_env() {
+        let payload = JobPayload {
+            queue_id: "q1".into(),
+            job_run_id: "j1".into(),
+            pipeline_id: "p1".into(),
+            repo_id: "r1".into(),
+            job_name: "test".into(),
+            steps: vec![],
+            env: HashMap::new(),
+            clone_url: None,
+            commit_sha: "abc".into(),
+        };
+
+        let json = serde_json::to_string(&payload).unwrap();
+        let deserialized: JobPayload = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.env.is_empty());
+    }
 }
