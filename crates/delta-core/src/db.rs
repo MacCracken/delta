@@ -13,6 +13,7 @@ pub mod pull_request;
 pub mod release;
 pub mod repo;
 pub mod retention;
+pub mod runner;
 pub mod search;
 pub mod secret;
 pub mod signing;
@@ -68,6 +69,7 @@ pub async fn init_pool_sized(db_url: &str, max_connections: u32) -> Result<Sqlit
         include_str!("../migrations/011_federation.sql"),
         include_str!("../migrations/012_encryption.sql"),
         include_str!("../migrations/013_workspaces.sql"),
+        include_str!("../migrations/005_runners.sql"),
     ] {
         sqlx::query(migration)
             .execute(&pool)

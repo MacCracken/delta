@@ -515,6 +515,7 @@ async fn dispatch_push_pipelines(
         secrets: &secrets,
         streams: Some(pipeline_streams),
         sandbox,
+        runners_enabled: ci_config.runner_token.is_some(),
     };
     delta_ci::runner::run_push_pipelines(&ctx, &branch).await;
     Ok(())

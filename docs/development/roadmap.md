@@ -8,6 +8,7 @@ All planned phases (1–9) and AGNOS integration are complete. Only demand-gated
 
 Items below are not planned for any phase. They will be prioritized if there is sufficient user demand.
 
+- [x] Self-hosted CI runners (offload jobs to external machines via a runner agent that polls for work)
 - [ ] Desktop app (Tauri webview shell wrapping the web UI)
 - [ ] Email notifications for pipeline failures
 - [ ] IDE extensions (VS Code, Zed)

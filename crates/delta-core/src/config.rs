@@ -113,6 +113,10 @@ pub struct CiConfig {
     /// Container runtime to use when kernel sandboxing is unavailable.
     #[serde(default)]
     pub container_runtime: ContainerRuntime,
+    /// Shared secret token that self-hosted runners use to authenticate.
+    /// Runners provide this token when registering and polling for jobs.
+    #[serde(default)]
+    pub runner_token: Option<String>,
 }
 
 impl Default for CiConfig {
@@ -120,6 +124,7 @@ impl Default for CiConfig {
         Self {
             sandbox_enabled: true,
             container_runtime: ContainerRuntime::Auto,
+            runner_token: None,
         }
     }
 }

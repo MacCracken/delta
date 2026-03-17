@@ -17,6 +17,7 @@ pub mod oci;
 pub mod pipelines;
 pub mod pulls;
 pub mod repos;
+pub mod runners;
 pub mod signing;
 pub mod ssh_keys;
 pub mod status_checks;
@@ -77,6 +78,7 @@ pub fn router(state: AppState) -> Router {
         .nest("/api/v1/audit", audit::router())
         .nest("/api/v1/federation", federation::router())
         .nest("/api/v1/backup", backup::router())
+        .nest("/api/v1/runners", runners::router())
         // OCI Distribution Spec — /v2/ routes
         .merge(oci::router())
         // Git LFS — /{owner}/{name}.git/info/lfs/...

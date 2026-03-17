@@ -9,6 +9,7 @@ pub mod events;
 pub mod executor;
 pub mod parser;
 pub mod pipeline;
+pub mod remote;
 pub mod runner;
 #[cfg(target_os = "linux")]
 pub mod sandbox;

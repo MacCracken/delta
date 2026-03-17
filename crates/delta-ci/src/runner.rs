@@ -1,11 +1,14 @@
 //! Pipeline runner — orchestrates workflow execution end-to-end.
 //!
 //! Connects the workflow parser, trigger system, executor, and database
-//! to run pipelines triggered by repository events.
+//! to run pipelines triggered by repository events. Jobs with
+//! `runs_on: "self-hosted, ..."` are queued for remote runners instead
+//! of being executed locally.
 
 use crate::events::{PipelineEvent, PipelineStreams};
 use crate::executor::{SandboxMode, execute_job, expand_workflow_matrices};
 use crate::parser::load_workflows;
+use crate::remote;
 use crate::trigger::{self, Event};
 use delta_core::db;
 use sqlx::SqlitePool;
@@ -22,6 +25,8 @@ pub struct PipelineContext<'a> {
     pub secrets: &'a HashMap<String, String>,
     pub streams: Option<&'a PipelineStreams>,
     pub sandbox: SandboxMode,
+    /// Whether self-hosted runners are enabled (ci.runner_token is set).
+    pub runners_enabled: bool,
 }
 
 /// Run all matching workflows for a push event.
@@ -173,6 +178,87 @@ async fn run_pipelines(
             for (dim, val) in &expanded.matrix_values {
                 job_env.insert(format!("MATRIX_{}", dim.to_uppercase()), val.clone());
             }
+
+            // Check if this job targets a self-hosted runner
+            if let Some(labels) =
+                ctx.runners_enabled
+                    .then(|| remote::parse_self_hosted(expanded.job.runs_on.as_deref()))
+                    .flatten()
+            {
+                // Enqueue for remote execution — runner will pick it up via poll
+                let payload = remote::build_payload(
+                    "",  // queue_id filled after enqueue
+                    &job_run.id,
+                    &pipeline.id,
+                    ctx.repo_id,
+                    &expanded.display_name,
+                    &expanded.job,
+                    &job_env,
+                    ctx.commit_sha,
+                );
+                let payload_json = match serde_json::to_string(&payload) {
+                    Ok(j) => j,
+                    Err(e) => {
+                        tracing::error!(job = &expanded.display_name, "failed to serialize job payload: {}", e);
+                        pipeline_passed = false;
+                        break;
+                    }
+                };
+
+                match db::runner::enqueue_job(
+                    ctx.pool,
+                    &job_run.id,
+                    &pipeline.id,
+                    ctx.repo_id,
+                    &labels,
+                    &payload_json,
+                )
+                .await
+                {
+                    Ok(queued) => {
+                        // Update the payload with the actual queue_id
+                        let mut final_payload = payload;
+                        final_payload.queue_id = queued.id.clone();
+                        if let Ok(updated_json) = serde_json::to_string(&final_payload) {
+                            let _ = sqlx::query(
+                                "UPDATE runner_job_queue SET payload = ? WHERE id = ?",
+                            )
+                            .bind(&updated_json)
+                            .bind(&queued.id)
+                            .execute(ctx.pool)
+                            .await;
+                        }
+
+                        tracing::info!(
+                            job = &expanded.display_name,
+                            queue_id = %queued.id,
+                            labels = ?labels,
+                            "job queued for self-hosted runner"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(job = &expanded.display_name, "failed to enqueue job: {}", e);
+                        if let Err(e) = db::pipeline::update_job_status(
+                            ctx.pool,
+                            &job_run.id,
+                            db::pipeline::RunStatus::Failed,
+                            Some(-1),
+                        )
+                        .await
+                        {
+                            tracing::error!(job_id = %job_run.id, "failed to mark job as failed: {}", e);
+                        }
+                        pipeline_passed = false;
+                        if expanded.fail_fast {
+                            break;
+                        }
+                    }
+                }
+                // Don't wait for remote jobs — they complete asynchronously
+                continue;
+            }
+
+            // --- Local execution path ---
 
             // Determine sandbox mode for this job
             let job_sandbox = resolve_job_sandbox(&ctx.sandbox, expanded.job.runs_on.as_deref());
