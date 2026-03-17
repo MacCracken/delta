@@ -57,7 +57,7 @@ async fn authenticate_runner(
     // The runner's full token must equal the configured runner_token exactly.
     let expected_hash = hash_token(runner_token);
     let provided_hash = hash_token(token);
-    if !constant_time_eq(expected_hash.as_bytes(), provided_hash.as_bytes()) {
+    if !delta_core::crypto::constant_time_eq(expected_hash.as_bytes(), provided_hash.as_bytes()) {
         return Err((StatusCode::UNAUTHORIZED, "invalid runner token".into()));
     }
 
@@ -71,18 +71,6 @@ async fn authenticate_runner(
 
 fn hash_token(token: &str) -> String {
     blake3::hash(token.as_bytes()).to_hex().to_string()
-}
-
-/// Constant-time byte comparison to prevent timing attacks.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
 }
 
 /// Verify that a runner has claimed a specific job via the queue.
@@ -150,7 +138,7 @@ async fn register_runner(
     // Validate the shared runner token via hash comparison (constant-time)
     let expected_hash = hash_token(runner_token);
     let provided_hash = hash_token(&req.token);
-    if !constant_time_eq(expected_hash.as_bytes(), provided_hash.as_bytes()) {
+    if !delta_core::crypto::constant_time_eq(expected_hash.as_bytes(), provided_hash.as_bytes()) {
         return Err((StatusCode::UNAUTHORIZED, "invalid runner token".into()));
     }
 
@@ -315,8 +303,14 @@ async fn start_job(
 ) -> Result<StatusCode, (StatusCode, String)> {
     let runner = authenticate_runner(&state, &headers).await?;
 
-    // Verify this runner has claimed this job
-    let _queued = verify_runner_owns_job(&state.db, &runner.id, &job_id).await?;
+    // Verify this runner has claimed this job and it's still in "claimed" status
+    let queued = verify_runner_owns_job(&state.db, &runner.id, &job_id).await?;
+    if queued.status != "claimed" {
+        return Err((
+            StatusCode::CONFLICT,
+            format!("job queue status is '{}', expected 'claimed'", queued.status),
+        ));
+    }
 
     // Mark the job_run as running
     db::pipeline::update_job_status(
@@ -376,6 +370,9 @@ async fn submit_step_log(
     }
     if req.step_index < 0 || req.step_index > 1000 {
         return Err((StatusCode::BAD_REQUEST, "step_index must be 0-1000".into()));
+    }
+    if req.status != "passed" && req.status != "failed" {
+        return Err((StatusCode::BAD_REQUEST, "status must be 'passed' or 'failed'".into()));
     }
 
     // Verify this runner has claimed this job
@@ -442,6 +439,22 @@ async fn complete_job(
 ) -> Result<StatusCode, (StatusCode, String)> {
     let runner = authenticate_runner(&state, &headers).await?;
 
+    // Validate step count and step name lengths
+    if req.steps.len() > 100 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "too many steps (max 100)".into(),
+        ));
+    }
+    for step in &req.steps {
+        if step.name.len() > 256 {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "step name too long (max 256)".into(),
+            ));
+        }
+    }
+
     // Verify this runner has claimed this job AND the queue_id matches
     let queued = verify_runner_owns_job(&state.db, &runner.id, &job_id).await?;
     if queued.id != req.queue_id {
@@ -490,7 +503,15 @@ async fn complete_job(
         })?;
 
     // Mark queued job as complete (with status guard)
-    let _ = db::runner::complete_queued_job(&state.db, &req.queue_id, &runner.id).await;
+    db::runner::complete_queued_job(&state.db, &req.queue_id, &runner.id)
+        .await
+        .map_err(|e| {
+            tracing::error!("failed to complete queued job: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to complete queued job".into(),
+            )
+        })?;
 
     // Emit job completed event to pipeline stream
     if let Some(pipeline_id) = get_pipeline_id_for_job(&state.db, &job_id).await {
@@ -537,6 +558,7 @@ async fn get_pipeline_id_for_job(pool: &sqlx::SqlitePool, job_id: &str) -> Optio
 }
 
 /// Mask secret values in output text for a given repo.
+/// Performs case-insensitive masking and also masks URL-encoded forms of secrets.
 async fn mask_secrets_for_job(state: &AppState, repo_id: &str, output: &str) -> String {
     let encryption_key = delta_core::crypto::derive_key(&state.config.auth.secrets_key);
     let secrets = match db::secret::get_all_values(&state.db, repo_id).await {
@@ -549,7 +571,43 @@ async fn mask_secrets_for_job(state: &AppState, repo_id: &str, output: &str) -> 
         if let Ok(value) = delta_core::crypto::decrypt(&encryption_key, encrypted_value)
             && !value.is_empty()
         {
-            masked = masked.replace(&value, "***");
+            // Case-insensitive replacement
+            let lower_masked = masked.to_lowercase();
+            let lower_value = value.to_lowercase();
+            let mut result = String::with_capacity(masked.len());
+            let mut search_start = 0;
+            while let Some(pos) = lower_masked[search_start..].find(&lower_value) {
+                let abs_pos = search_start + pos;
+                result.push_str(&masked[search_start..abs_pos]);
+                result.push_str("***");
+                search_start = abs_pos + value.len();
+            }
+            result.push_str(&masked[search_start..]);
+            masked = result;
+
+            // Also mask URL-encoded form
+            let url_encoded: String = value.bytes().map(|b| {
+                if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
+                    (b as char).to_string()
+                } else {
+                    format!("%{:02X}", b)
+                }
+            }).collect();
+            if url_encoded != value {
+                // Case-insensitive replacement for URL-encoded form
+                let lower_masked2 = masked.to_lowercase();
+                let lower_encoded = url_encoded.to_lowercase();
+                let mut result2 = String::with_capacity(masked.len());
+                let mut search_start2 = 0;
+                while let Some(pos) = lower_masked2[search_start2..].find(&lower_encoded) {
+                    let abs_pos = search_start2 + pos;
+                    result2.push_str(&masked[search_start2..abs_pos]);
+                    result2.push_str("***");
+                    search_start2 = abs_pos + url_encoded.len();
+                }
+                result2.push_str(&masked[search_start2..]);
+                masked = result2;
+            }
         }
     }
     masked

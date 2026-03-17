@@ -98,10 +98,10 @@ async fn register(
     {
         return Err((StatusCode::BAD_REQUEST, "invalid email address".into()));
     }
-    if req.password.len() < 8 {
+    if req.password.len() < 8 || req.password.len() > 1024 {
         return Err((
             StatusCode::BAD_REQUEST,
-            "password must be at least 8 characters".into(),
+            "password must be between 8 and 1024 characters".into(),
         ));
     }
     let user = auth::register(

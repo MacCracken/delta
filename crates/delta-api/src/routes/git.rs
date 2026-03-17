@@ -353,9 +353,23 @@ pub fn is_private_url(url_str: &str) -> bool {
         return true;
     };
     let h = host.trim_start_matches('[').trim_end_matches(']');
+
+    // Check IPv4-mapped IPv6 addresses (e.g. ::ffff:127.0.0.1)
+    if let Some(ipv4_part) = h.strip_prefix("::ffff:") {
+        // Re-check the extracted IPv4 portion
+        return ipv4_part == "localhost"
+            || ipv4_part.starts_with("127.")
+            || ipv4_part == "0.0.0.0"
+            || ipv4_part.starts_with("10.")
+            || ipv4_part.starts_with("192.168.")
+            || ipv4_part.starts_with("169.254.")
+            || is_private_172(ipv4_part);
+    }
+
     h == "localhost"
-        || h == "127.0.0.1"
+        || h.starts_with("127.")
         || h == "::1"
+        || h == "::"
         || h == "0.0.0.0"
         || h.starts_with("10.")
         || h.starts_with("192.168.")

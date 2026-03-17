@@ -421,8 +421,20 @@ async fn push_manifest(
         )
     })?;
 
-    // If reference is a tag (not a digest), create/update the tag
+    // If reference is a tag (not a digest), validate and create/update the tag
     if !reference.starts_with("sha256:") {
+        // Validate tag: 1-128 chars, alphanumeric/hyphens/dots/underscores
+        if reference.is_empty()
+            || reference.len() > 128
+            || !reference
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_')
+        {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "tag must be 1-128 characters: alphanumeric, hyphens, dots, or underscores".into(),
+            ));
+        }
         db::oci::put_tag(&state.db, &repo_id, &reference, &manifest.id)
             .await
             .map_err(|e| {

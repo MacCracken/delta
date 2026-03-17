@@ -323,6 +323,9 @@ pub fn expand_workflow_matrices(
 /// Maximum time a single step can run before being killed.
 const STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60); // 30 minutes
 
+/// Maximum output buffer size per stream (stdout/stderr): 2 MB.
+const MAX_OUTPUT_SIZE: usize = 2 * 1024 * 1024;
+
 /// Build the Command for a step, applying sandbox if configured.
 fn build_step_command(
     cmd: &str,
@@ -404,6 +407,8 @@ async fn run_step(
         let mut stderr_done = stderr_reader.is_none();
         let mut out = String::new();
         let mut err = String::new();
+        let mut out_truncated = false;
+        let mut err_truncated = false;
 
         loop {
             if stdout_done && stderr_done {
@@ -427,8 +432,15 @@ async fn run_step(
                                     line: l.clone(),
                                 });
                             }
-                            out.push_str(&l);
-                            out.push('\n');
+                            if !out_truncated {
+                                if out.len() + l.len() + 1 > MAX_OUTPUT_SIZE {
+                                    out.push_str("\n... [stdout truncated at 2 MB]");
+                                    out_truncated = true;
+                                } else {
+                                    out.push_str(&l);
+                                    out.push('\n');
+                                }
+                            }
                         }
                         Ok(None) => stdout_done = true,
                         Err(_) => stdout_done = true,
@@ -450,8 +462,15 @@ async fn run_step(
                                     line: l.clone(),
                                 });
                             }
-                            err.push_str(&l);
-                            err.push('\n');
+                            if !err_truncated {
+                                if err.len() + l.len() + 1 > MAX_OUTPUT_SIZE {
+                                    err.push_str("\n... [stderr truncated at 2 MB]");
+                                    err_truncated = true;
+                                } else {
+                                    err.push_str(&l);
+                                    err.push('\n');
+                                }
+                            }
                         }
                         Ok(None) => stderr_done = true,
                         Err(_) => stderr_done = true,

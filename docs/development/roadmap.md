@@ -18,25 +18,28 @@ Items below are not planned for any phase. They will be prioritized if there is 
 
 Low-priority improvements identified during security audit (2026.3.16):
 
-- [ ] Cap pipeline step log accumulation (prevent OOM from verbose workflows)
+- [x] Cap pipeline step log accumulation (local: 2MB cap, remote: 1MB cap)
+- [x] OCI tag/reference name validation (1-128 chars, alphanumeric)
+- [x] Password max-length validation (1024 char cap)
+- [x] Deduplicate constant_time_eq (shared from delta_core::crypto)
+- [x] Loopback SSRF: block full 127.0.0.0/8, [::], IPv4-mapped IPv6
+- [x] MCP workspace handlers: verify workspace creator ownership
+- [x] Step log errors: propagate instead of silently swallowing in complete_job
 - [ ] Propagate RNG errors in crypto.rs instead of panicking
 - [ ] CSV formula injection protection in audit export (escape =, +, -, @)
 - [ ] Account registration limits / email verification
-- [ ] OCI tag/reference name validation
 - [ ] Request body size limits on Bytes endpoints (git, LFS, OCI)
 - [ ] Pagination on runner list endpoint
 - [ ] Runner stale-job cleanup (re-queue claimed jobs after heartbeat timeout)
 - [ ] Seccomp filter support for aarch64 (currently x86_64 only)
-- [ ] Password max-length validation (Argon2 DoS prevention)
-- [ ] Deduplicate constant_time_eq (runners.rs + crypto.rs → shared util)
-- [ ] Loopback SSRF: block full 127.0.0.0/8 range and [::] in is_private_url
-- [ ] MCP workspace handlers: verify workspace creator ownership
 - [ ] Migrate legacy encrypted secrets (no MAC) → new format with MAC
 - [ ] Empty queue_id fallback: pre-allocate queue ID before building payload
 - [ ] Runner shared-token model: consider per-runner unique tokens for isolation
 - [ ] Pipeline finalization race: atomic check-and-update to avoid dropped events
 - [ ] Admin promotion/demotion API endpoint (currently requires direct DB access)
-- [ ] Step log errors: propagate instead of silently swallowing in complete_job
+- [ ] Deduplicate parse_repo_name and basic auth parsing (git.rs, lfs.rs)
+- [ ] CORS: restrict allow_headers to specific headers when origins are configured
+- [ ] Workspace lock DashMap cleanup on workspace expiry
 
 ---
 

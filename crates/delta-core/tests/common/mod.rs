@@ -22,7 +22,7 @@ pub async fn setup_pool() -> sqlx::SqlitePool {
         include_str!("../../migrations/011_federation.sql"),
         include_str!("../../migrations/012_encryption.sql"),
         include_str!("../../migrations/013_workspaces.sql"),
-        include_str!("../../migrations/005_runners.sql"),
+        include_str!("../../migrations/015_runners.sql"),
     ] {
         sqlx::query(migration)
             .execute(&pool)

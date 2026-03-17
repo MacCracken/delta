@@ -24,6 +24,36 @@ pub fn detect_runtime() -> Option<String> {
     None
 }
 
+/// Validate a container image name. Must have at most one `:` (for tag separator),
+/// no path traversal sequences, and no other dangerous characters.
+/// Returns the validated image or falls back to a safe default.
+fn validate_image(image: &str) -> String {
+    let colon_count = image.chars().filter(|&c| c == ':').count();
+    let has_traversal = image.contains("..") || image.contains('/');
+    if colon_count > 1 || has_traversal || image.is_empty() {
+        tracing::warn!(
+            image = image,
+            "invalid container image name, falling back to alpine:latest"
+        );
+        return "alpine:latest".to_string();
+    }
+    image.to_string()
+}
+
+/// Validate a work_dir path: must not contain `:` to prevent mount manipulation.
+/// Returns the validated path or falls back to a safe default.
+fn validate_work_dir(work_dir: &Path) -> std::path::PathBuf {
+    let work_dir_str = work_dir.display().to_string();
+    if work_dir_str.contains(':') {
+        tracing::warn!(
+            work_dir = %work_dir_str,
+            "work_dir contains ':', falling back to /tmp"
+        );
+        return std::path::PathBuf::from("/tmp");
+    }
+    work_dir.to_path_buf()
+}
+
 /// Build a `tokio::process::Command` that runs a step inside a container.
 ///
 /// The work directory is bind-mounted at `/workspace` inside the container.
@@ -35,6 +65,9 @@ pub fn build_container_command(
     work_dir: &Path,
     env_vars: &HashMap<String, String>,
 ) -> Command {
+    let safe_image = validate_image(image);
+    let safe_work_dir = validate_work_dir(work_dir);
+
     let mut command = Command::new(runtime);
     command
         .arg("run")
@@ -50,16 +83,21 @@ pub fn build_container_command(
     // Mount work directory and a writable /tmp
     command
         .arg("-v")
-        .arg(format!("{}:/workspace", work_dir.display()));
+        .arg(format!("{}:/workspace", safe_work_dir.display()));
     command.arg("--tmpfs").arg("/tmp:rw,noexec,nosuid,size=64m");
     command.arg("-w").arg("/workspace");
 
-    // Pass environment variables
+    // Pass environment variables, skipping keys with invalid characters
     for (k, v) in env_vars {
+        // H3: Skip env var keys containing `=`, newline, or null bytes
+        if k.contains('=') || k.contains('\n') || k.contains('\0') {
+            tracing::warn!(key = k, "skipping env var with invalid key");
+            continue;
+        }
         command.arg("-e").arg(format!("{}={}", k, v));
     }
 
-    command.arg(image).arg("sh").arg("-c").arg(cmd);
+    command.arg(&safe_image).arg("sh").arg("-c").arg(cmd);
 
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
 

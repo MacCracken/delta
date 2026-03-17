@@ -96,13 +96,14 @@ async fn export_audit_logs(
     // Scope export to the requesting user's own audit logs only
     let own_id = user.id.to_string();
     let limit = params.limit.min(100000);
+    let offset = params.offset.max(0);
 
     let entries = db::audit::list(
         &state.db,
         Some(&own_id),
         params.resource_type.as_deref(),
         limit,
-        params.offset,
+        offset,
     )
     .await
     .map_err(|e| {
@@ -154,7 +155,7 @@ async fn export_audit_logs(
             "entries": entries,
             "total": total,
             "limit": limit,
-            "offset": params.offset,
+            "offset": offset,
             "integrity_hash": integrity_hash,
             "exported_at": chrono::Utc::now().to_rfc3339(),
         });

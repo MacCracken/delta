@@ -199,6 +199,14 @@ async fn list_remote_repos(
             )
         })?;
 
+    // SSRF protection: re-check instance URL at fetch time
+    if crate::routes::git::is_private_url(&instance.url) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "federation instance URL targets a private network".into(),
+        ));
+    }
+
     let url = format!("{}/api/v1/repos", instance.url.trim_end_matches('/'));
     let resp = client.get(&url).send().await.map_err(|e| {
         tracing::error!("failed to fetch remote repos from {}: {}", url, e);
@@ -233,6 +241,27 @@ async fn create_mirror(
     Json(req): Json<CreateMirrorRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
     crate::helpers::require_site_admin(&state, &user).await?;
+
+    // Validate owner and name: alphanumeric, hyphens, underscores, dots; max 128 chars
+    fn is_valid_name(s: &str) -> bool {
+        !s.is_empty()
+            && s.len() <= 128
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    }
+    if !is_valid_name(&req.owner) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "owner must be 1-128 alphanumeric characters, hyphens, underscores, or dots".into(),
+        ));
+    }
+    if !is_valid_name(&req.name) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "name must be 1-128 alphanumeric characters, hyphens, underscores, or dots".into(),
+        ));
+    }
+
     let instance = db::federation::get_instance(&state.db, &req.instance_id)
         .await
         .map_err(|e| match e {
@@ -249,6 +278,15 @@ async fn create_mirror(
         req.owner,
         req.name
     );
+
+    // SSRF protection: check the constructed remote URL
+    if crate::routes::git::is_private_url(&remote_url) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "mirror URL targets a private network".into(),
+        ));
+    }
+
     let local_name = req.local_name.as_deref().unwrap_or(&req.name);
     let user_id = user.id.to_string();
 

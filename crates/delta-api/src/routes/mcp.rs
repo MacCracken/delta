@@ -679,7 +679,24 @@ async fn handle_workspace_trigger_pipeline(state: &AppState, args: &serde_json::
     let ws_id = require_str(args, "workspace_id")?;
     let workflow_name = require_str(args, "workflow_name")?;
 
-    let repo = resolve_repo(state, owner, name).await?;
+    // Look up repo directly (supports private repos for authenticated workspace users)
+    let owner_user = db::user::get_by_username(&state.db, owner)
+        .await
+        .map_err(|_| error_result(StatusCode::NOT_FOUND, &format!("user '{}' not found", owner)))?;
+    let repo = db::repo::get_by_owner_and_name(&state.db, &owner_user.id.to_string(), name)
+        .await
+        .map_err(|_| error_result(StatusCode::NOT_FOUND, &format!("repository '{}/{}' not found", owner, name)))?;
+
+    // Verify user is owner or collaborator
+    if user.id != owner_user.id {
+        let role = db::collaborator::get_role(&state.db, &repo.id.to_string(), &user.id.to_string())
+            .await
+            .unwrap_or(None);
+        if role.is_none() {
+            return Err(error_result(StatusCode::NOT_FOUND, &format!("repository '{}/{}' not found", owner, name)));
+        }
+    }
+
     let ws = db::workspace::get_by_id(&state.db, ws_id)
         .await
         .map_err(|e| error_result(StatusCode::NOT_FOUND, &e.to_string()))?;
@@ -715,7 +732,24 @@ async fn handle_workspace_create_pull(state: &AppState, args: &serde_json::Value
     let body = arg_str(args, "body");
     let is_draft = args.get("is_draft").and_then(|v| v.as_bool()).unwrap_or(false);
 
-    let repo = resolve_repo(state, owner, name).await?;
+    // Look up repo directly (supports private repos for authenticated workspace users)
+    let owner_user = db::user::get_by_username(&state.db, owner)
+        .await
+        .map_err(|_| error_result(StatusCode::NOT_FOUND, &format!("user '{}' not found", owner)))?;
+    let repo = db::repo::get_by_owner_and_name(&state.db, &owner_user.id.to_string(), name)
+        .await
+        .map_err(|_| error_result(StatusCode::NOT_FOUND, &format!("repository '{}/{}' not found", owner, name)))?;
+
+    // Verify user is owner or collaborator
+    if user.id != owner_user.id {
+        let role = db::collaborator::get_role(&state.db, &repo.id.to_string(), &user.id.to_string())
+            .await
+            .unwrap_or(None);
+        if role.is_none() {
+            return Err(error_result(StatusCode::NOT_FOUND, &format!("repository '{}/{}' not found", owner, name)));
+        }
+    }
+
     let ws = db::workspace::get_by_id(&state.db, ws_id)
         .await
         .map_err(|e| error_result(StatusCode::NOT_FOUND, &e.to_string()))?;

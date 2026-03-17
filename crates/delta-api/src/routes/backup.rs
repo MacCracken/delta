@@ -64,7 +64,7 @@ async fn backup_status(
         repos_dir: state.config.storage.repos_dir.display().to_string(),
         artifacts_dir: state.config.storage.artifacts_dir.display().to_string(),
         db_url: if state.config.storage.db_url.contains("sqlite") {
-            state.config.storage.db_url.clone()
+            "[sqlite]".into()
         } else {
             "[redacted]".into()
         },
