@@ -389,18 +389,17 @@ async fn resolve_repo(
 // ---------------------------------------------------------------------------
 
 async fn handle_list_repos(state: &AppState, args: &serde_json::Value) -> ToolResult {
-    if let Some(owner) = arg_str(args, "owner") {
+    // Always use list_visible to exclude private repos (MCP is unauthenticated)
+    let owner_filter = if let Some(owner) = arg_str(args, "owner") {
         let owner_id = resolve_owner(state, owner).await?;
-        let repos = db::repo::list_by_owner(&state.db, &owner_id)
-            .await
-            .map_err(|e| error_result(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
-        ok_json(&repos)
+        Some(owner_id)
     } else {
-        let repos = db::repo::list_visible(&state.db, None)
-            .await
-            .map_err(|e| error_result(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
-        ok_json(&repos)
-    }
+        None
+    };
+    let repos = db::repo::list_visible(&state.db, owner_filter.as_deref())
+        .await
+        .map_err(|e| error_result(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    ok_json(&repos)
 }
 
 async fn handle_get_repo(state: &AppState, args: &serde_json::Value) -> ToolResult {

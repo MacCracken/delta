@@ -9,6 +9,7 @@ pub struct User {
     pub display_name: Option<String>,
     pub email: String,
     pub is_agent: bool,
+    pub is_admin: bool,
     pub created_at: DateTime<Utc>,
 }
 
@@ -20,6 +21,7 @@ impl User {
             display_name: None,
             email: email.into(),
             is_agent: false,
+            is_admin: false,
             created_at: Utc::now(),
         }
     }

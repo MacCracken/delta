@@ -28,6 +28,11 @@ Low-priority improvements identified during security audit (2026.3.16):
 - [ ] Runner stale-job cleanup (re-queue claimed jobs after heartbeat timeout)
 - [ ] Seccomp filter support for aarch64 (currently x86_64 only)
 - [ ] Password max-length validation (Argon2 DoS prevention)
+- [ ] Deduplicate constant_time_eq (runners.rs + crypto.rs → shared util)
+- [ ] Loopback SSRF: block full 127.0.0.0/8 range and [::] in is_private_url
+- [ ] MCP workspace handlers: verify workspace creator ownership
+- [ ] Migrate legacy encrypted secrets (no MAC) → new format with MAC
+- [ ] Empty queue_id fallback: pre-allocate queue ID before building payload
 
 ---
 

@@ -65,7 +65,7 @@ pub async fn register(
     // Only update labels/heartbeat on conflict — do NOT overwrite token_hash
     // to prevent runner identity takeover. If the token changes, the runner
     // must be deleted and re-registered by an admin.
-    sqlx::query(
+    let result = sqlx::query(
         "INSERT INTO runners (id, name, token_hash, labels, status, last_heartbeat_at, created_at)
          VALUES (?, ?, ?, ?, 'online', ?, ?)
          ON CONFLICT(name) DO UPDATE SET
@@ -83,6 +83,13 @@ pub async fn register(
     .execute(pool)
     .await
     .map_err(|e| DeltaError::Pipeline(e.to_string()))?;
+
+    // If no rows were affected, a runner with this name exists but has a different token
+    if result.rows_affected() == 0 {
+        return Err(DeltaError::Pipeline(
+            "runner name already registered with a different token".into(),
+        ));
+    }
 
     get_by_name(pool, name).await
 }

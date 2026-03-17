@@ -53,14 +53,15 @@ async fn authenticate_runner(
         .and_then(|v| v.to_str().ok())
         .ok_or((StatusCode::UNAUTHORIZED, "missing X-Runner-Token header".into()))?;
 
-    // Constant-time comparison of the shared runner token
-    if token.len() < runner_token.len()
-        || !constant_time_eq(runner_token.as_bytes(), &token.as_bytes()[..runner_token.len()])
-    {
+    // Validate shared runner token via hash comparison (constant-time, no length leak).
+    // The runner's full token must equal the configured runner_token exactly.
+    let expected_hash = hash_token(runner_token);
+    let provided_hash = hash_token(token);
+    if !constant_time_eq(expected_hash.as_bytes(), provided_hash.as_bytes()) {
         return Err((StatusCode::UNAUTHORIZED, "invalid runner token".into()));
     }
 
-    let token_hash = hash_token(token);
+    let token_hash = provided_hash;
     let runner = db::runner::authenticate(&state.db, name, &token_hash)
         .await
         .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid runner credentials".into()))?;
@@ -146,13 +147,10 @@ async fn register_runner(
         "runner support not configured (set ci.runner_token)".into(),
     ))?;
 
-    // Constant-time validation of the shared runner token prefix
-    if req.token.len() < runner_token.len()
-        || !constant_time_eq(
-            runner_token.as_bytes(),
-            &req.token.as_bytes()[..runner_token.len()],
-        )
-    {
+    // Validate the shared runner token via hash comparison (constant-time)
+    let expected_hash = hash_token(runner_token);
+    let provided_hash = hash_token(&req.token);
+    if !constant_time_eq(expected_hash.as_bytes(), provided_hash.as_bytes()) {
         return Err((StatusCode::UNAUTHORIZED, "invalid runner token".into()));
     }
 
@@ -194,8 +192,7 @@ async fn register_runner(
         }
     }
 
-    let token_hash = hash_token(&req.token);
-    let runner = db::runner::register(&state.db, &req.name, &token_hash, &req.labels)
+    let runner = db::runner::register(&state.db, &req.name, &provided_hash, &req.labels)
         .await
         .map_err(|e| {
             tracing::error!("failed to register runner: {}", e);
@@ -377,13 +374,7 @@ async fn submit_step_log(
     let queued = verify_runner_owns_job(&state.db, &runner.id, &job_id).await?;
 
     // Enforce output size limit
-    let output = if req.output.len() > MAX_STEP_LOG_SIZE {
-        let mut truncated = req.output[..MAX_STEP_LOG_SIZE].to_string();
-        truncated.push_str("\n... [output truncated at 1 MB]");
-        truncated
-    } else {
-        req.output
-    };
+    let output = truncate_output(&req.output);
 
     // Mask secrets in the output
     let masked_output = mask_secrets_for_job(&state, &queued.repo_id, &output).await;
@@ -459,13 +450,7 @@ async fn complete_job(
         } else {
             "failed"
         };
-        let output = if step.output.len() > MAX_STEP_LOG_SIZE {
-            let mut truncated = step.output[..MAX_STEP_LOG_SIZE].to_string();
-            truncated.push_str("\n... [output truncated at 1 MB]");
-            truncated
-        } else {
-            step.output.clone()
-        };
+        let output = truncate_output(&step.output);
         let masked_output = mask_secrets_for_job(&state, &queued.repo_id, &output).await;
         let _ = db::pipeline::append_step_log(
             &state.db,
@@ -517,6 +502,26 @@ async fn complete_job(
 }
 
 // --- Helpers ---
+
+/// Truncate output to MAX_STEP_LOG_SIZE, respecting UTF-8 char boundaries.
+fn truncate_output(s: &str) -> String {
+    if s.len() <= MAX_STEP_LOG_SIZE {
+        return s.to_string();
+    }
+    // Find the last char boundary at or before the limit
+    let truncated = match s.get(..MAX_STEP_LOG_SIZE) {
+        Some(valid) => valid,
+        None => {
+            // Binary search for last valid char boundary
+            let mut end = MAX_STEP_LOG_SIZE;
+            while end > 0 && !s.is_char_boundary(end) {
+                end -= 1;
+            }
+            &s[..end]
+        }
+    };
+    format!("{}\n... [output truncated at 1 MB]", truncated)
+}
 
 async fn get_pipeline_id_for_job(pool: &sqlx::SqlitePool, job_id: &str) -> Option<String> {
     let job = db::pipeline::get_job(pool, job_id).await.ok()?;

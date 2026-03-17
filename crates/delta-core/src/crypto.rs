@@ -35,8 +35,10 @@ pub fn decrypt(key: &[u8; 32], hex_input: &str) -> Result<String> {
     // Minimum: 16 (nonce) + 0 (ciphertext) + 32 (tag) = 48
     if raw.len() < 48 {
         // Legacy format (no tag): 16 (nonce) + ciphertext, minimum 16 bytes
-        // Fall back to untagged decryption for backwards compatibility
+        // Fall back to untagged decryption for backwards compatibility.
+        // NOTE: Legacy secrets have no integrity protection. Re-encrypt to upgrade.
         if raw.len() >= 16 {
+            tracing::warn!("decrypting legacy secret without MAC — re-encrypt to upgrade integrity protection");
             return decrypt_legacy(key, &raw);
         }
         return Err(DeltaError::Storage("secret data too short".into()));

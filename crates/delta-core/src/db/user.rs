@@ -203,6 +203,7 @@ struct UserRow {
     #[allow(dead_code)]
     password_hash: String,
     is_agent: bool,
+    is_admin: bool,
     created_at: String,
     #[allow(dead_code)]
     updated_at: String,
@@ -216,6 +217,7 @@ impl UserRow {
             display_name: self.display_name,
             email: self.email,
             is_agent: self.is_agent,
+            is_admin: self.is_admin,
             created_at: self.created_at.parse().unwrap_or_default(),
         }
     }

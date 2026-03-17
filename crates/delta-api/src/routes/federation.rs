@@ -108,8 +108,9 @@ async fn list_instances(
 async fn get_instance(
     State(state): State<AppState>,
     Path(instance_id): Path<String>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
 ) -> Result<Json<db::federation::FederationInstance>, (StatusCode, String)> {
+    crate::helpers::require_site_admin(&state, &user).await?;
     let instance = db::federation::get_instance(&state.db, &instance_id)
         .await
         .map_err(|e| match e {
@@ -170,8 +171,9 @@ async fn update_trust(
 async fn list_remote_repos(
     State(state): State<AppState>,
     Path(instance_id): Path<String>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    crate::helpers::require_site_admin(&state, &user).await?;
     let instance = db::federation::get_instance(&state.db, &instance_id)
         .await
         .map_err(|e| match e {
@@ -230,6 +232,7 @@ async fn create_mirror(
     AuthUser(user): AuthUser,
     Json(req): Json<CreateMirrorRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
+    crate::helpers::require_site_admin(&state, &user).await?;
     let instance = db::federation::get_instance(&state.db, &req.instance_id)
         .await
         .map_err(|e| match e {

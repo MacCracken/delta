@@ -77,6 +77,27 @@ pub async fn init_pool_sized(db_url: &str, max_connections: u32) -> Result<Sqlit
             .map_err(|e| crate::DeltaError::Storage(e.to_string()))?;
     }
 
+    // Add is_admin column if not present (idempotent ALTER TABLE for SQLite)
+    let has_admin_col = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'is_admin'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap_or(0);
+
+    if has_admin_col == 0 {
+        sqlx::query("ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT FALSE")
+            .execute(&pool)
+            .await
+            .map_err(|e| crate::DeltaError::Storage(e.to_string()))?;
+        // Set first registered user as admin
+        let _ = sqlx::query(
+            "UPDATE users SET is_admin = TRUE WHERE id = (SELECT id FROM users ORDER BY created_at ASC LIMIT 1)",
+        )
+        .execute(&pool)
+        .await;
+    }
+
     tracing::info!("database initialized (pool_size={})", max_connections);
     Ok(pool)
 }

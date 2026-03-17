@@ -69,6 +69,25 @@ fn not_found(msg: &str) -> (StatusCode, String) {
     (StatusCode::NOT_FOUND, msg.to_string())
 }
 
+/// Resolve a public repo record by owner/name. Returns 404 for private repos.
+async fn resolve_public_repo(
+    state: &AppState,
+    owner: &str,
+    repo: &str,
+) -> Result<delta_core::models::repo::Repository, (StatusCode, String)> {
+    let owner_user = db::user::get_by_username(&state.db, owner)
+        .await
+        .map_err(|_| not_found("user not found"))?;
+    let owner_id = owner_user.id.to_string();
+    let repo_record = db::repo::get_by_owner_and_name(&state.db, &owner_id, repo)
+        .await
+        .map_err(|_| not_found("repository not found"))?;
+    if repo_record.visibility != delta_core::models::repo::Visibility::Public {
+        return Err(not_found("repository not found"));
+    }
+    Ok(repo_record)
+}
+
 /// Resolve repo and get the on-disk path.
 /// Only returns public repos — private repos are hidden from the web UI
 /// (which has no authentication context).
@@ -599,13 +618,7 @@ async fn pipeline_list(
     State(state): State<AppState>,
     Path((owner, repo)): Path<(String, String)>,
 ) -> WebResult {
-    let owner_user = db::user::get_by_username(&state.db, &owner)
-        .await
-        .map_err(|_| not_found("user not found"))?;
-    let owner_id = owner_user.id.to_string();
-    let repo_record = db::repo::get_by_owner_and_name(&state.db, &owner_id, &repo)
-        .await
-        .map_err(|_| not_found("repository not found"))?;
+    let repo_record = resolve_public_repo(&state, &owner, &repo).await?;
 
     let pipelines = db::pipeline::list_pipelines(&state.db, &repo_record.id.to_string(), None, 50)
         .await
@@ -627,13 +640,7 @@ async fn pipeline_detail(
     State(state): State<AppState>,
     Path((owner, repo, pipeline_id)): Path<(String, String, String)>,
 ) -> WebResult {
-    let owner_user = db::user::get_by_username(&state.db, &owner)
-        .await
-        .map_err(|_| not_found("user not found"))?;
-    let owner_id = owner_user.id.to_string();
-    let repo_record = db::repo::get_by_owner_and_name(&state.db, &owner_id, &repo)
-        .await
-        .map_err(|_| not_found("repository not found"))?;
+    let repo_record = resolve_public_repo(&state, &owner, &repo).await?;
 
     let pipeline = db::pipeline::get_pipeline(&state.db, &pipeline_id)
         .await
@@ -679,13 +686,7 @@ async fn pull_list(
     Path((owner, repo)): Path<(String, String)>,
     Query(query): Query<PullListQuery>,
 ) -> WebResult {
-    let owner_user = db::user::get_by_username(&state.db, &owner)
-        .await
-        .map_err(|_| not_found("user not found"))?;
-    let owner_id = owner_user.id.to_string();
-    let repo_record = db::repo::get_by_owner_and_name(&state.db, &owner_id, &repo)
-        .await
-        .map_err(|_| not_found("repository not found"))?;
+    let repo_record = resolve_public_repo(&state, &owner, &repo).await?;
 
     let repo_id = repo_record.id.to_string();
     let state_filter = query.state.unwrap_or_else(|| "open".to_string());
@@ -759,13 +760,7 @@ async fn pull_detail(
     Path((owner, repo, number)): Path<(String, String, i64)>,
     Query(query): Query<PullDetailQuery>,
 ) -> WebResult {
-    let owner_user = db::user::get_by_username(&state.db, &owner)
-        .await
-        .map_err(|_| not_found("user not found"))?;
-    let owner_id = owner_user.id.to_string();
-    let repo_record = db::repo::get_by_owner_and_name(&state.db, &owner_id, &repo)
-        .await
-        .map_err(|_| not_found("repository not found"))?;
+    let repo_record = resolve_public_repo(&state, &owner, &repo).await?;
 
     let repo_id = repo_record.id.to_string();
     let pr = db::pull_request::get_by_number(&state.db, &repo_id, number)
@@ -923,13 +918,7 @@ async fn repo_settings(
     State(state): State<AppState>,
     Path((owner, repo)): Path<(String, String)>,
 ) -> WebResult {
-    let owner_user = db::user::get_by_username(&state.db, &owner)
-        .await
-        .map_err(|_| not_found("user not found"))?;
-    let owner_id = owner_user.id.to_string();
-    let repo_record = db::repo::get_by_owner_and_name(&state.db, &owner_id, &repo)
-        .await
-        .map_err(|_| not_found("repository not found"))?;
+    let repo_record = resolve_public_repo(&state, &owner, &repo).await?;
 
     let repo_id = repo_record.id.to_string();
     let repo_path = state

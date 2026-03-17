@@ -22,12 +22,19 @@ pub async fn setup_pool() -> sqlx::SqlitePool {
         include_str!("../../migrations/011_federation.sql"),
         include_str!("../../migrations/012_encryption.sql"),
         include_str!("../../migrations/013_workspaces.sql"),
+        include_str!("../../migrations/005_runners.sql"),
     ] {
         sqlx::query(migration)
             .execute(&pool)
             .await
             .expect("failed to run migration");
     }
+
+    // Add is_admin column (idempotent)
+    sqlx::query("ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT FALSE")
+        .execute(&pool)
+        .await
+        .expect("failed to add is_admin column");
 
     pool
 }
