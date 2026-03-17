@@ -95,12 +95,42 @@ async fn main() -> anyhow::Result<()> {
     {
         let cleanup_db = state.db.clone();
         let cleanup_repo_host = state.repo_host.clone();
+        let cleanup_locks = state.workspace_locks.clone();
         tokio::spawn(async move {
             delta_api::routes::workspaces::cleanup_expired_workspaces(
                 cleanup_db,
                 cleanup_repo_host,
+                cleanup_locks,
             )
             .await;
+        });
+    }
+
+    // Spawn stale runner job reclaim task (every 5 minutes, 10 minute timeout)
+    {
+        let stale_db = state.db.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                match delta_core::db::runner::reclaim_stale_jobs(&stale_db, 10).await {
+                    Ok(0) => {}
+                    Ok(n) => tracing::info!("reclaimed {} stale runner jobs", n),
+                    Err(e) => tracing::error!("stale job reclaim failed: {}", e),
+                }
+            }
+        });
+    }
+
+    // Re-encrypt legacy secrets at startup (non-blocking)
+    {
+        let reencrypt_db = state.db.clone();
+        let secrets_key = state.config.auth.secrets_key.clone();
+        tokio::spawn(async move {
+            match delta_core::db::secret::re_encrypt_legacy(&reencrypt_db, &secrets_key).await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!("re-encrypted {} legacy secrets", n),
+                Err(e) => tracing::error!("legacy secret re-encryption failed: {}", e),
+            }
         });
     }
 

@@ -101,6 +101,62 @@ pub async fn delete(pool: &SqlitePool, repo_id: &str, name: &str) -> Result<()> 
     Ok(())
 }
 
+/// Re-encrypt legacy secrets (those without MAC tags) using the current format.
+/// Iterates all repo_secrets, tries to decrypt each, and if the hex-decoded data
+/// is shorter than 48 bytes (indicating legacy format), re-encrypts with the new
+/// MAC format and updates the row. Returns the count of migrated secrets.
+pub async fn re_encrypt_legacy(pool: &SqlitePool, encryption_passphrase: &str) -> Result<u64> {
+    let key = crate::crypto::derive_key(encryption_passphrase);
+
+    let rows = sqlx::query_as::<_, SecretValueWithIdRow>(
+        "SELECT id, encrypted_value FROM repo_secrets",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| DeltaError::Storage(e.to_string()))?;
+
+    let mut count = 0u64;
+    for row in rows {
+        // Check if it's legacy format by examining hex-decoded length
+        let raw = match hex::decode(&row.encrypted_value) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        // Legacy format: raw.len() < 48 (no MAC tag). New format: >= 48.
+        if raw.len() >= 48 {
+            continue; // Already new format
+        }
+        // Try to decrypt with legacy path
+        let plaintext = match crate::crypto::decrypt(&key, &row.encrypted_value) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        // Re-encrypt with new MAC format
+        let new_encrypted = match crate::crypto::encrypt(&key, plaintext.as_bytes()) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let now = Utc::now().to_rfc3339();
+        let _ = sqlx::query(
+            "UPDATE repo_secrets SET encrypted_value = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(&new_encrypted)
+        .bind(&now)
+        .bind(&row.id)
+        .execute(pool)
+        .await;
+        count += 1;
+    }
+
+    Ok(count)
+}
+
+#[derive(sqlx::FromRow)]
+struct SecretValueWithIdRow {
+    id: String,
+    encrypted_value: String,
+}
+
 #[derive(sqlx::FromRow)]
 struct SecretRow {
     id: String,

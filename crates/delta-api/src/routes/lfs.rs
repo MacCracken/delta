@@ -31,7 +31,7 @@ pub fn router() -> Router<AppState> {
 
 /// Strip `.git` suffix from repo segment.
 fn parse_repo_name(repo: &str) -> &str {
-    repo.strip_suffix(".git").unwrap_or(repo)
+    crate::helpers::strip_git_suffix(repo)
 }
 
 // --- LFS Batch API types ---
@@ -294,6 +294,9 @@ async fn download(
         .into_response())
 }
 
+/// Maximum upload body size: 100 MB.
+const MAX_UPLOAD_BODY_SIZE: usize = 100 * 1024 * 1024;
+
 /// PUT /{owner}/{repo}.git/info/lfs/objects/{oid}
 async fn upload(
     State(state): State<AppState>,
@@ -301,6 +304,13 @@ async fn upload(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, (StatusCode, String)> {
+    if body.len() > MAX_UPLOAD_BODY_SIZE {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request body exceeds 100 MB limit".into(),
+        ));
+    }
+
     let name = parse_repo_name(&repo);
 
     let (repo_record, _) = resolve_repo_and_auth_write(&state, &headers, &owner, name).await?;

@@ -16,6 +16,7 @@ pub fn router() -> Router<AppState> {
         .route("/login", post(login))
         .route("/tokens", get(list_tokens).post(create_token))
         .route("/tokens/{token_id}", axum::routing::delete(delete_token))
+        .route("/admin/{user_id}", post(set_admin))
 }
 
 #[derive(Deserialize)]
@@ -66,6 +67,19 @@ async fn register(
                 "too many registration attempts".into(),
             ));
         }
+    }
+
+    // Safety valve: cap total registrations
+    let user_count: i64 =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users")
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0);
+    if user_count >= 1000 {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "registration limit reached".into(),
+        ));
     }
 
     let Json(req): Json<RegisterRequest> = Json::from_request(request, &state)
@@ -334,5 +348,27 @@ async fn delete_token(
     delta_core::db::user::delete_token(&state.db, &token_id, &user.id.to_string())
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// --- Admin promotion/demotion ---
+
+#[derive(Deserialize)]
+struct SetAdminRequest {
+    is_admin: bool,
+}
+
+async fn set_admin(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+    Json(req): Json<SetAdminRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    crate::helpers::require_site_admin(&state, &user).await?;
+
+    delta_core::db::user::set_admin(&state.db, &user_id, req.is_admin)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+
     Ok(StatusCode::NO_CONTENT)
 }

@@ -32,19 +32,17 @@ use tower_http::cors::{Any, CorsLayer};
 
 pub fn router(state: AppState) -> Router {
     let cors = {
-        let base = CorsLayer::new()
-            .allow_methods([
-                axum::http::Method::GET,
-                axum::http::Method::POST,
-                axum::http::Method::PUT,
-                axum::http::Method::PATCH,
-                axum::http::Method::DELETE,
-            ])
-            .allow_headers(Any);
+        let base = CorsLayer::new().allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::PUT,
+            axum::http::Method::PATCH,
+            axum::http::Method::DELETE,
+        ]);
 
         if state.config.server.cors_origins.is_empty() {
             tracing::warn!("CORS: allow_origin(Any) — set server.cors_origins in production");
-            base.allow_origin(Any)
+            base.allow_headers(Any).allow_origin(Any)
         } else {
             let origins: Vec<axum::http::HeaderValue> = state
                 .config
@@ -53,7 +51,12 @@ pub fn router(state: AppState) -> Router {
                 .iter()
                 .filter_map(|o| o.parse().ok())
                 .collect();
-            base.allow_origin(origins)
+            base.allow_headers([
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::ACCEPT,
+            ])
+            .allow_origin(origins)
         }
     };
 

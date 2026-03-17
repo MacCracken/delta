@@ -165,9 +165,16 @@ async fn export_audit_logs(
 }
 
 fn csv_escape(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') {
-        format!("\"{}\"", s.replace('"', "\"\""))
+    // Defuse spreadsheet formula injection: prepend a single quote if the value
+    // starts with a character that spreadsheets treat as a formula prefix.
+    let safe = if s.starts_with('=') || s.starts_with('+') || s.starts_with('-') || s.starts_with('@') {
+        format!("'{s}")
     } else {
         s.to_string()
+    };
+    if safe.contains(',') || safe.contains('"') || safe.contains('\n') {
+        format!("\"{}\"", safe.replace('"', "\"\""))
+    } else {
+        safe
     }
 }

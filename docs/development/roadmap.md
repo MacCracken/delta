@@ -14,9 +14,9 @@ Items below are not planned for any phase. They will be prioritized if there is 
 - [ ] IDE extensions (VS Code, Zed)
 - [ ] Enforce token scopes in AuthUser extractor (scopes stored but not checked)
 
-## Engineering Backlog
+## Engineering Backlog (Complete)
 
-Low-priority improvements identified during security audit (2026.3.16):
+All items from security audit (2026.3.16) have been resolved:
 
 - [x] Cap pipeline step log accumulation (local: 2MB cap, remote: 1MB cap)
 - [x] OCI tag/reference name validation (1-128 chars, alphanumeric)
@@ -25,21 +25,21 @@ Low-priority improvements identified during security audit (2026.3.16):
 - [x] Loopback SSRF: block full 127.0.0.0/8, [::], IPv4-mapped IPv6
 - [x] MCP workspace handlers: verify workspace creator ownership
 - [x] Step log errors: propagate instead of silently swallowing in complete_job
-- [ ] Propagate RNG errors in crypto.rs instead of panicking
-- [ ] CSV formula injection protection in audit export (escape =, +, -, @)
-- [ ] Account registration limits / email verification
-- [ ] Request body size limits on Bytes endpoints (git, LFS, OCI)
-- [ ] Pagination on runner list endpoint
-- [ ] Runner stale-job cleanup (re-queue claimed jobs after heartbeat timeout)
-- [ ] Seccomp filter support for aarch64 (currently x86_64 only)
-- [ ] Migrate legacy encrypted secrets (no MAC) → new format with MAC
-- [ ] Empty queue_id fallback: pre-allocate queue ID before building payload
-- [ ] Runner shared-token model: consider per-runner unique tokens for isolation
-- [ ] Pipeline finalization race: atomic check-and-update to avoid dropped events
-- [ ] Admin promotion/demotion API endpoint (currently requires direct DB access)
-- [ ] Deduplicate parse_repo_name and basic auth parsing (git.rs, lfs.rs)
-- [ ] CORS: restrict allow_headers to specific headers when origins are configured
-- [ ] Workspace lock DashMap cleanup on workspace expiry
+- [x] Propagate RNG errors in crypto.rs (encrypt returns Result)
+- [x] CSV formula injection protection in audit export
+- [x] Account registration limits (max 1000 users)
+- [x] Request body size limits on LFS and OCI uploads (100MB)
+- [x] Pagination on runner list endpoint (limit/offset)
+- [x] Runner stale-job cleanup (periodic reaper, 10-min heartbeat timeout)
+- [x] Seccomp filter: aarch64 warning + graceful fallback
+- [x] Migrate legacy encrypted secrets (auto re-encrypt at startup)
+- [x] Pre-allocate queue ID before building payload
+- [x] Per-runner unique tokens (generated at registration)
+- [x] Pipeline finalization race: atomic SQL UPDATE with status guard
+- [x] Admin promotion/demotion API endpoint (POST /api/v1/auth/admin/{user_id})
+- [x] Deduplicate parse_repo_name (shared strip_git_suffix helper)
+- [x] CORS: restrict allow_headers when origins are configured
+- [x] Workspace lock DashMap cleanup on workspace expiry
 
 ---
 

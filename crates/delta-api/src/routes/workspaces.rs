@@ -626,6 +626,7 @@ async fn diff_workspace(
 pub async fn cleanup_expired_workspaces(
     db: sqlx::SqlitePool,
     repo_host: Arc<delta_vcs::RepoHost>,
+    workspace_locks: WorkspaceLocks,
 ) {
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(300)).await;
@@ -656,6 +657,9 @@ pub async fn cleanup_expired_workspaces(
 
             let _ = db::workspace::update_status(&db, &ws.id.to_string(), WorkspaceStatus::Expired)
                 .await;
+
+            // Clean up the per-workspace lock entry from the DashMap
+            workspace_locks.remove(&ws.id.to_string());
         }
     }
 }

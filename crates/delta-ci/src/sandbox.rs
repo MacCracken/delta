@@ -89,6 +89,16 @@ fn path_beneath_rules(
 /// process_vm_writev, reboot, kexec_load, init_module, finit_module,
 /// delete_module, swapon, swapoff, acct, settimeofday, clock_settime.
 pub fn apply_seccomp() -> Result<(), String> {
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        tracing::warn!(
+            "seccomp filter skipped: syscall numbers are x86_64-only (current arch is not x86_64)"
+        );
+        return Ok(());
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    {
     use libc::{
         BPF_ABS, BPF_JEQ, BPF_JMP, BPF_K, BPF_LD, BPF_RET, BPF_W, PR_SET_NO_NEW_PRIVS,
         PR_SET_SECCOMP, SECCOMP_MODE_FILTER, SECCOMP_RET_ALLOW, SECCOMP_RET_ERRNO, sock_filter,
@@ -228,6 +238,7 @@ pub fn apply_seccomp() -> Result<(), String> {
     }
 
     Ok(())
+    } // end #[cfg(target_arch = "x86_64")]
 }
 
 /// Apply both Landlock and seccomp sandboxing.

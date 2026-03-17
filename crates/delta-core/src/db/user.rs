@@ -194,6 +194,21 @@ pub async fn delete_token(pool: &SqlitePool, token_id: &str, user_id: &str) -> R
     Ok(())
 }
 
+/// Set or unset the admin flag on a user.
+pub async fn set_admin(pool: &SqlitePool, user_id: &str, is_admin: bool) -> Result<()> {
+    let result = sqlx::query("UPDATE users SET is_admin = ? WHERE id = ?")
+        .bind(is_admin)
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .map_err(|e| DeltaError::Storage(e.to_string()))?;
+
+    if result.rows_affected() == 0 {
+        return Err(DeltaError::AuthFailed("user not found".into()));
+    }
+    Ok(())
+}
+
 #[derive(sqlx::FromRow)]
 struct UserRow {
     id: String,

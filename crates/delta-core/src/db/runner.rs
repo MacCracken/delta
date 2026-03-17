@@ -114,11 +114,15 @@ pub async fn get_by_name(pool: &SqlitePool, name: &str) -> Result<Runner> {
     Ok(row.into_runner())
 }
 
-pub async fn list(pool: &SqlitePool) -> Result<Vec<Runner>> {
-    let rows = sqlx::query_as::<_, RunnerRow>("SELECT * FROM runners ORDER BY name")
-        .fetch_all(pool)
-        .await
-        .map_err(|e| DeltaError::Pipeline(e.to_string()))?;
+pub async fn list(pool: &SqlitePool, limit: i64, offset: i64) -> Result<Vec<Runner>> {
+    let rows = sqlx::query_as::<_, RunnerRow>(
+        "SELECT * FROM runners ORDER BY name LIMIT ? OFFSET ?",
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| DeltaError::Pipeline(e.to_string()))?;
     Ok(rows.into_iter().map(|r| r.into_runner()).collect())
 }
 
@@ -161,15 +165,17 @@ pub async fn authenticate(pool: &SqlitePool, name: &str, token_hash: &str) -> Re
 }
 
 /// Enqueue a job for remote execution by a self-hosted runner.
+/// The caller provides the queue `id` (pre-generated) so the payload
+/// can include the queue_id without a two-phase update.
 pub async fn enqueue_job(
     pool: &SqlitePool,
+    id: &str,
     job_run_id: &str,
     pipeline_id: &str,
     repo_id: &str,
     labels: &[String],
     payload: &str,
 ) -> Result<QueuedJob> {
-    let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     let labels_str = labels.join(",");
 
@@ -177,7 +183,7 @@ pub async fn enqueue_job(
         "INSERT INTO runner_job_queue (id, job_run_id, pipeline_id, repo_id, labels, payload, status, created_at)
          VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
     )
-    .bind(&id)
+    .bind(id)
     .bind(job_run_id)
     .bind(pipeline_id)
     .bind(repo_id)
@@ -188,7 +194,7 @@ pub async fn enqueue_job(
     .await
     .map_err(|e| DeltaError::Pipeline(e.to_string()))?;
 
-    get_queued_job(pool, &id).await
+    get_queued_job(pool, id).await
 }
 
 /// Poll for the next pending job matching the runner's labels.
@@ -291,6 +297,27 @@ pub async fn complete_queued_job(pool: &SqlitePool, queue_id: &str, runner_id: &
         return Err(DeltaError::Pipeline("cannot complete: job not claimed by this runner".into()));
     }
     Ok(())
+}
+
+/// Reclaim jobs stuck in 'claimed' status where the runner's heartbeat
+/// is older than `stale_minutes` minutes ago. Resets them to 'pending'.
+/// Returns the count of reclaimed jobs.
+pub async fn reclaim_stale_jobs(pool: &SqlitePool, stale_minutes: i64) -> Result<u64> {
+    let result = sqlx::query(
+        "UPDATE runner_job_queue SET status = 'pending', claimed_by = NULL
+         WHERE status = 'claimed'
+         AND claimed_by IN (
+             SELECT id FROM runners
+             WHERE last_heartbeat_at < datetime('now', '-' || ? || ' minutes')
+                OR last_heartbeat_at IS NULL
+         )",
+    )
+    .bind(stale_minutes)
+    .execute(pool)
+    .await
+    .map_err(|e| DeltaError::Pipeline(e.to_string()))?;
+
+    Ok(result.rows_affected())
 }
 
 // --- Row types ---

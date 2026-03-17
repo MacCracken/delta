@@ -32,17 +32,13 @@ pub fn router() -> Router<AppState> {
 
 // --- Runner authentication helper ---
 
-/// Authenticate a runner request via the `X-Runner-Name` and `X-Runner-Token` headers,
-/// validated against the shared `ci.runner_token` in config and the runner's stored token hash.
+/// Authenticate a runner request via the `X-Runner-Name` and `X-Runner-Token` headers.
+/// Uses the per-runner unique token (issued during registration) instead of the
+/// shared `ci.runner_token`. The token is hashed and looked up in the database.
 async fn authenticate_runner(
     state: &AppState,
     headers: &axum::http::HeaderMap,
 ) -> Result<db::runner::Runner, (StatusCode, String)> {
-    let runner_token = state.config.ci.runner_token.as_deref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "runner support not configured (set ci.runner_token)".into(),
-    ))?;
-
     let name = headers
         .get("x-runner-name")
         .and_then(|v| v.to_str().ok())
@@ -53,24 +49,12 @@ async fn authenticate_runner(
         .and_then(|v| v.to_str().ok())
         .ok_or((StatusCode::UNAUTHORIZED, "missing X-Runner-Token header".into()))?;
 
-    // Validate shared runner token via hash comparison (constant-time, no length leak).
-    // The runner's full token must equal the configured runner_token exactly.
-    let expected_hash = hash_token(runner_token);
-    let provided_hash = hash_token(token);
-    if !delta_core::crypto::constant_time_eq(expected_hash.as_bytes(), provided_hash.as_bytes()) {
-        return Err((StatusCode::UNAUTHORIZED, "invalid runner token".into()));
-    }
-
-    let token_hash = provided_hash;
+    let token_hash = crate::auth::hash_token(token);
     let runner = db::runner::authenticate(&state.db, name, &token_hash)
         .await
         .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid runner credentials".into()))?;
 
     Ok(runner)
-}
-
-fn hash_token(token: &str) -> String {
-    blake3::hash(token.as_bytes()).to_hex().to_string()
 }
 
 /// Verify that a runner has claimed a specific job via the queue.
@@ -111,6 +95,9 @@ struct RunnerResponse {
     status: String,
     last_heartbeat_at: Option<String>,
     created_at: String,
+    /// Only populated on registration — the per-runner authentication token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token: Option<String>,
 }
 
 impl From<db::runner::Runner> for RunnerResponse {
@@ -122,6 +109,7 @@ impl From<db::runner::Runner> for RunnerResponse {
             status: r.status.as_str().to_string(),
             last_heartbeat_at: r.last_heartbeat_at,
             created_at: r.created_at,
+            token: None,
         }
     }
 }
@@ -136,8 +124,8 @@ async fn register_runner(
     ))?;
 
     // Validate the shared runner token via hash comparison (constant-time)
-    let expected_hash = hash_token(runner_token);
-    let provided_hash = hash_token(&req.token);
+    let expected_hash = crate::auth::hash_token(runner_token);
+    let provided_hash = crate::auth::hash_token(&req.token);
     if !delta_core::crypto::constant_time_eq(expected_hash.as_bytes(), provided_hash.as_bytes()) {
         return Err((StatusCode::UNAUTHORIZED, "invalid runner token".into()));
     }
@@ -180,7 +168,17 @@ async fn register_runner(
         }
     }
 
-    let runner = db::runner::register(&state.db, &req.name, &provided_hash, &req.labels)
+    // Generate a unique per-runner token. The runner uses this token
+    // (not the shared runner_token) for all subsequent authentication.
+    let (raw_runner_token, runner_token_hash) = crate::auth::generate_token().map_err(|e| {
+        tracing::error!("failed to generate runner token: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal server error".into(),
+        )
+    })?;
+
+    let runner = db::runner::register(&state.db, &req.name, &runner_token_hash, &req.labels)
         .await
         .map_err(|e| {
             tracing::error!("failed to register runner: {}", e);
@@ -192,18 +190,35 @@ async fn register_runner(
 
     tracing::info!(runner_name = %runner.name, runner_id = %runner.id, "runner registered");
 
-    Ok((StatusCode::CREATED, Json(runner.into())))
+    let mut resp: RunnerResponse = runner.into();
+    resp.token = Some(raw_runner_token);
+    Ok((StatusCode::CREATED, Json(resp)))
 }
 
 // --- List runners (admin only — requires first user / site admin) ---
 
+#[derive(Deserialize)]
+struct ListRunnersQuery {
+    #[serde(default = "default_runner_limit")]
+    limit: i64,
+    #[serde(default)]
+    offset: i64,
+}
+fn default_runner_limit() -> i64 {
+    100
+}
+
 async fn list_runners(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
+    axum::extract::Query(query): axum::extract::Query<ListRunnersQuery>,
 ) -> Result<Json<Vec<RunnerResponse>>, (StatusCode, String)> {
     crate::helpers::require_site_admin(&state, &user).await?;
 
-    let runners = db::runner::list(&state.db).await.map_err(|e| {
+    let limit = query.limit.clamp(1, 500);
+    let offset = query.offset.max(0);
+
+    let runners = db::runner::list(&state.db, limit, offset).await.map_err(|e| {
         tracing::error!("failed to list runners: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -614,7 +629,8 @@ async fn mask_secrets_for_job(state: &AppState, repo_id: &str, output: &str) -> 
 }
 
 /// Check if all jobs in a pipeline are terminal (passed/failed/cancelled).
-/// If so, set the pipeline's final status.
+/// If so, set the pipeline's final status using an atomic UPDATE with a
+/// WHERE guard so only one concurrent caller succeeds.
 async fn finalize_pipeline_if_done(
     pool: &sqlx::SqlitePool,
     pipeline_id: &str,
@@ -647,7 +663,26 @@ async fn finalize_pipeline_if_done(
         db::pipeline::RunStatus::Failed
     };
 
-    let _ = db::pipeline::update_pipeline_status(pool, pipeline_id, final_status).await;
+    // Atomic check-and-update: only succeed if pipeline is still in a non-terminal state.
+    let now = chrono::Utc::now().to_rfc3339();
+    let result = sqlx::query(
+        "UPDATE pipeline_runs SET status = ?, finished_at = ? WHERE id = ? AND status IN ('queued', 'running')",
+    )
+    .bind(final_status.as_str())
+    .bind(&now)
+    .bind(pipeline_id)
+    .execute(pool)
+    .await;
+
+    let rows_affected = match result {
+        Ok(r) => r.rows_affected(),
+        Err(_) => return,
+    };
+
+    // If rows_affected == 0, another thread already finalized. Skip event emission.
+    if rows_affected == 0 {
+        return;
+    }
 
     if let Some(sender) = streams.get(pipeline_id) {
         let _ = sender.send(delta_ci::PipelineEvent::PipelineCompleted {

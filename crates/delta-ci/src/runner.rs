@@ -193,8 +193,13 @@ async fn run_pipelines(
                     .filter(|(k, _)| k.starts_with("DELTA_") || k.starts_with("MATRIX_"))
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
+
+                // Pre-generate queue ID so the payload includes it directly,
+                // eliminating the two-phase update.
+                let queue_id = uuid::Uuid::new_v4().to_string();
+
                 let payload = remote::build_payload(
-                    "",  // queue_id filled after enqueue
+                    &queue_id,
                     &job_run.id,
                     &pipeline.id,
                     ctx.repo_id,
@@ -214,6 +219,7 @@ async fn run_pipelines(
 
                 match db::runner::enqueue_job(
                     ctx.pool,
+                    &queue_id,
                     &job_run.id,
                     &pipeline.id,
                     ctx.repo_id,
@@ -223,19 +229,6 @@ async fn run_pipelines(
                 .await
                 {
                     Ok(queued) => {
-                        // Update the payload with the actual queue_id
-                        let mut final_payload = payload;
-                        final_payload.queue_id = queued.id.clone();
-                        if let Ok(updated_json) = serde_json::to_string(&final_payload) {
-                            let _ = sqlx::query(
-                                "UPDATE runner_job_queue SET payload = ? WHERE id = ?",
-                            )
-                            .bind(&updated_json)
-                            .bind(&queued.id)
-                            .execute(ctx.pool)
-                            .await;
-                        }
-
                         tracing::info!(
                             job = &expanded.display_name,
                             queue_id = %queued.id,

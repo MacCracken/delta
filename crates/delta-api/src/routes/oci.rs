@@ -17,6 +17,9 @@ use crate::extractors::AuthUser;
 use crate::helpers::{require_role, resolve_repo_authed};
 use crate::state::AppState;
 
+/// Maximum upload body size: 100 MB.
+const MAX_UPLOAD_BODY_SIZE: usize = 100 * 1024 * 1024;
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/v2/", get(version_check))
@@ -135,6 +138,13 @@ async fn initiate_upload(
     Query(query): Query<UploadQuery>,
     body: Bytes,
 ) -> Result<(StatusCode, HeaderMap), (StatusCode, String)> {
+    if body.len() > MAX_UPLOAD_BODY_SIZE {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request body exceeds 100 MB limit".into(),
+        ));
+    }
+
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
 
@@ -198,6 +208,13 @@ async fn upload_chunk(
     AuthUser(user): AuthUser,
     body: Bytes,
 ) -> Result<(StatusCode, HeaderMap), (StatusCode, String)> {
+    if body.len() > MAX_UPLOAD_BODY_SIZE {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request body exceeds 100 MB limit".into(),
+        ));
+    }
+
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
 
@@ -257,6 +274,13 @@ async fn complete_upload(
     Query(query): Query<UploadQuery>,
     body: Bytes,
 ) -> Result<(StatusCode, HeaderMap), (StatusCode, String)> {
+    if body.len() > MAX_UPLOAD_BODY_SIZE {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request body exceeds 100 MB limit".into(),
+        ));
+    }
+
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
 

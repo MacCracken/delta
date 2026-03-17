@@ -36,7 +36,7 @@ pub fn router() -> Router<AppState> {
 
 /// Strip the `.git` suffix from a repo path segment (e.g. "myrepo.git" → "myrepo").
 fn parse_repo_name(repo: &str) -> &str {
-    repo.strip_suffix(".git").unwrap_or(repo)
+    crate::helpers::strip_git_suffix(repo)
 }
 
 #[derive(Deserialize)]

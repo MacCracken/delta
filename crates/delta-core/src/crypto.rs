@@ -10,9 +10,10 @@ use crate::{DeltaError, Result};
 
 /// Encrypt a plaintext value using the given key.
 /// Returns a hex-encoded string of `nonce || ciphertext || tag`.
-pub fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> String {
+pub fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<String> {
     let mut nonce = [0u8; 16];
-    getrandom::fill(&mut nonce).expect("RNG failure");
+    getrandom::fill(&mut nonce)
+        .map_err(|e| DeltaError::Storage(format!("RNG failure: {e}")))?;
 
     let ciphertext = xor_stream(key, &nonce, plaintext);
 
@@ -23,7 +24,7 @@ pub fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> String {
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&ciphertext);
     out.extend_from_slice(&tag);
-    hex::encode(out)
+    Ok(hex::encode(out))
 }
 
 /// Decrypt a hex-encoded `nonce || ciphertext || tag` value using the given key.
@@ -127,16 +128,17 @@ fn xor_stream(key: &[u8; 32], nonce: &[u8; 16], data: &[u8]) -> Vec<u8> {
 }
 
 /// Generate a random 32-byte key and return it as hex.
-pub fn generate_repo_key() -> String {
+pub fn generate_repo_key() -> Result<String> {
     let mut key = [0u8; 32];
-    getrandom::fill(&mut key).expect("failed to generate random key");
-    hex::encode(key)
+    getrandom::fill(&mut key)
+        .map_err(|e| DeltaError::Storage(format!("RNG failure: {e}")))?;
+    Ok(hex::encode(key))
 }
 
 /// Encrypt a repository encryption key for a specific user.
 /// Uses the user's derived key (from their token/password) to wrap the repo key.
 /// Returns hex-encoded ciphertext.
-pub fn wrap_repo_key(user_key: &[u8; 32], repo_key_hex: &str) -> String {
+pub fn wrap_repo_key(user_key: &[u8; 32], repo_key_hex: &str) -> Result<String> {
     encrypt(user_key, repo_key_hex.as_bytes())
 }
 
@@ -154,7 +156,7 @@ mod tests {
     fn test_roundtrip() {
         let key = derive_key("test-secret-key");
         let plaintext = "my-super-secret-api-key-12345";
-        let encrypted = encrypt(&key, plaintext.as_bytes());
+        let encrypted = encrypt(&key, plaintext.as_bytes()).unwrap();
         let decrypted = decrypt(&key, &encrypted).unwrap();
         assert_eq!(decrypted, plaintext);
     }
@@ -163,8 +165,8 @@ mod tests {
     fn test_different_nonce_each_time() {
         let key = derive_key("test-key");
         let plaintext = b"same-value";
-        let enc1 = encrypt(&key, plaintext);
-        let enc2 = encrypt(&key, plaintext);
+        let enc1 = encrypt(&key, plaintext).unwrap();
+        let enc2 = encrypt(&key, plaintext).unwrap();
         assert_ne!(enc1, enc2); // Different nonces produce different ciphertext
     }
 
@@ -172,7 +174,7 @@ mod tests {
     fn test_wrong_key_fails_with_error() {
         let key1 = derive_key("key-one");
         let key2 = derive_key("key-two");
-        let encrypted = encrypt(&key1, b"secret");
+        let encrypted = encrypt(&key1, b"secret").unwrap();
         let result = decrypt(&key2, &encrypted);
         // With MAC, wrong key should produce an integrity error
         assert!(result.is_err());
@@ -185,7 +187,7 @@ mod tests {
     #[test]
     fn test_tampered_ciphertext_fails() {
         let key = derive_key("key");
-        let encrypted = encrypt(&key, b"secret");
+        let encrypted = encrypt(&key, b"secret").unwrap();
         let mut raw = hex::decode(&encrypted).unwrap();
         // Flip a byte in the ciphertext (after nonce, before tag)
         if raw.len() > 20 {
@@ -199,7 +201,7 @@ mod tests {
     #[test]
     fn test_empty_plaintext() {
         let key = derive_key("key");
-        let encrypted = encrypt(&key, b"");
+        let encrypted = encrypt(&key, b"").unwrap();
         let decrypted = decrypt(&key, &encrypted).unwrap();
         assert_eq!(decrypted, "");
     }
@@ -208,27 +210,27 @@ mod tests {
     fn test_long_plaintext() {
         let key = derive_key("key");
         let plaintext = "a]".repeat(500);
-        let encrypted = encrypt(&key, plaintext.as_bytes());
+        let encrypted = encrypt(&key, plaintext.as_bytes()).unwrap();
         let decrypted = decrypt(&key, &encrypted).unwrap();
         assert_eq!(decrypted, plaintext);
     }
 
     #[test]
     fn test_generate_repo_key() {
-        let key = generate_repo_key();
+        let key = generate_repo_key().unwrap();
         assert_eq!(key.len(), 64); // 32 bytes as hex
         assert!(key.chars().all(|c| c.is_ascii_hexdigit()));
 
-        let key2 = generate_repo_key();
+        let key2 = generate_repo_key().unwrap();
         assert_ne!(key, key2);
     }
 
     #[test]
     fn test_wrap_unwrap_repo_key() {
         let user_key = derive_key("user-password");
-        let repo_key = generate_repo_key();
+        let repo_key = generate_repo_key().unwrap();
 
-        let wrapped = wrap_repo_key(&user_key, &repo_key);
+        let wrapped = wrap_repo_key(&user_key, &repo_key).unwrap();
         assert_ne!(wrapped, repo_key);
 
         let unwrapped = unwrap_repo_key(&user_key, &wrapped).unwrap();
@@ -239,9 +241,9 @@ mod tests {
     fn test_wrap_wrong_key_fails() {
         let key1 = derive_key("user1");
         let key2 = derive_key("user2");
-        let repo_key = generate_repo_key();
+        let repo_key = generate_repo_key().unwrap();
 
-        let wrapped = wrap_repo_key(&key1, &repo_key);
+        let wrapped = wrap_repo_key(&key1, &repo_key).unwrap();
         let result = unwrap_repo_key(&key2, &wrapped);
         assert!(result.is_err()); // Now properly fails instead of silently decrypting to garbage
     }

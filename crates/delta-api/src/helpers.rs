@@ -8,6 +8,12 @@ use delta_core::models::user::User;
 
 use crate::state::AppState;
 
+/// Strip `.git` suffix from a repository name segment.
+/// Used by git.rs and lfs.rs routes to normalize repo names.
+pub fn strip_git_suffix(repo: &str) -> &str {
+    repo.strip_suffix(".git").unwrap_or(repo)
+}
+
 /// Resolve a repository by owner username and repo name.
 /// Returns (Repository, owner User).
 ///
