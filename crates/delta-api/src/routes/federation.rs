@@ -48,11 +48,21 @@ struct AddInstanceRequest {
 
 async fn add_instance(
     State(state): State<AppState>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
     Json(req): Json<AddInstanceRequest>,
 ) -> Result<(StatusCode, Json<db::federation::FederationInstance>), (StatusCode, String)> {
+    crate::helpers::require_site_admin(&state, &user).await?;
+
     if req.url.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "url must not be empty".into()));
+    }
+
+    // SSRF protection: reject private/internal URLs
+    if crate::routes::git::is_private_url(&req.url) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "federation instance URL must not target a private network".into(),
+        ));
     }
 
     let instance = db::federation::add_instance(
@@ -79,8 +89,9 @@ async fn add_instance(
 
 async fn list_instances(
     State(state): State<AppState>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
 ) -> Result<Json<Vec<db::federation::FederationInstance>>, (StatusCode, String)> {
+    crate::helpers::require_site_admin(&state, &user).await?;
     let instances = db::federation::list_instances(&state.db)
         .await
         .map_err(|e| {
@@ -115,8 +126,9 @@ async fn get_instance(
 async fn remove_instance(
     State(state): State<AppState>,
     Path(instance_id): Path<String>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    crate::helpers::require_site_admin(&state, &user).await?;
     db::federation::delete_instance(&state.db, &instance_id)
         .await
         .map_err(|e| match e {
@@ -138,9 +150,10 @@ struct UpdateTrustRequest {
 async fn update_trust(
     State(state): State<AppState>,
     Path(instance_id): Path<String>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
     Json(req): Json<UpdateTrustRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    crate::helpers::require_site_admin(&state, &user).await?;
     db::federation::update_trust(&state.db, &instance_id, req.trusted)
         .await
         .map_err(|e| match e {

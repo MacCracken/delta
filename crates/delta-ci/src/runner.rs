@@ -185,7 +185,14 @@ async fn run_pipelines(
                     .then(|| remote::parse_self_hosted(expanded.job.runs_on.as_deref()))
                     .flatten()
             {
-                // Enqueue for remote execution — runner will pick it up via poll
+                // Enqueue for remote execution — runner will pick it up via poll.
+                // Strip secrets from the env — runners should not receive repo secrets.
+                // Only DELTA_* and MATRIX_* vars are included.
+                let safe_env: HashMap<String, String> = job_env
+                    .iter()
+                    .filter(|(k, _)| k.starts_with("DELTA_") || k.starts_with("MATRIX_"))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
                 let payload = remote::build_payload(
                     "",  // queue_id filled after enqueue
                     &job_run.id,
@@ -193,7 +200,7 @@ async fn run_pipelines(
                     ctx.repo_id,
                     &expanded.display_name,
                     &expanded.job,
-                    &job_env,
+                    &safe_env,
                     ctx.commit_sha,
                 );
                 let payload_json = match serde_json::to_string(&payload) {
@@ -372,34 +379,55 @@ async fn run_pipelines(
             }
         }
 
-        // Update pipeline status
-        let final_status = if pipeline_passed {
-            db::pipeline::RunStatus::Passed
-        } else {
-            db::pipeline::RunStatus::Failed
-        };
-
-        // Emit pipeline completed event
-        let _ = tx.send(PipelineEvent::PipelineCompleted {
-            status: format!("{:?}", final_status).to_lowercase(),
+        // Check if any jobs were dispatched to remote runners (still queued).
+        // If so, don't finalize the pipeline yet — the runner completion handler
+        // will finalize when all jobs are done.
+        let jobs = db::pipeline::list_jobs(ctx.pool, &pipeline.id)
+            .await
+            .unwrap_or_default();
+        let has_pending_remote = jobs.iter().any(|j| {
+            matches!(
+                j.status,
+                db::pipeline::RunStatus::Queued | db::pipeline::RunStatus::Running
+            )
         });
 
-        // Remove broadcast channel from registry
-        if let Some(streams) = ctx.streams {
-            streams.remove(&pipeline.id);
-        }
+        if has_pending_remote {
+            tracing::info!(
+                pipeline_id = %pipeline.id,
+                "pipeline has remote jobs still pending — deferring finalization"
+            );
+        } else {
+            // All jobs completed locally — finalize now
+            let final_status = if pipeline_passed {
+                db::pipeline::RunStatus::Passed
+            } else {
+                db::pipeline::RunStatus::Failed
+            };
 
-        if let Err(e) =
-            db::pipeline::update_pipeline_status(ctx.pool, &pipeline.id, final_status).await
-        {
-            tracing::error!(pipeline_id = %pipeline.id, "failed to update pipeline final status: {}", e);
+            // Emit pipeline completed event
+            let _ = tx.send(PipelineEvent::PipelineCompleted {
+                status: format!("{:?}", final_status).to_lowercase(),
+            });
+
+            // Remove broadcast channel from registry
+            if let Some(streams) = ctx.streams {
+                streams.remove(&pipeline.id);
+            }
+
+            if let Err(e) =
+                db::pipeline::update_pipeline_status(ctx.pool, &pipeline.id, final_status).await
+            {
+                tracing::error!(pipeline_id = %pipeline.id, "failed to update pipeline final status: {}", e);
+            }
         }
 
         tracing::info!(
             workflow = filename,
             pipeline_id = %pipeline.id,
-            status = ?final_status,
-            "pipeline complete"
+            passed = pipeline_passed,
+            has_remote = has_pending_remote,
+            "pipeline local jobs complete"
         );
     }
 }

@@ -357,20 +357,31 @@ async fn resolve_owner(
 }
 
 /// Resolve owner + repo name to a repo, returning the repo.
+/// Only returns public repos — private repos require authentication via workspace tools.
 async fn resolve_repo(
     state: &AppState,
     owner: &str,
     name: &str,
 ) -> Result<delta_core::models::repo::Repository, (StatusCode, Json<McpToolResult>)> {
     let owner_id = resolve_owner(state, owner).await?;
-    db::repo::get_by_owner_and_name(&state.db, &owner_id, name)
+    let repo = db::repo::get_by_owner_and_name(&state.db, &owner_id, name)
         .await
         .map_err(|_| {
             error_result(
                 StatusCode::NOT_FOUND,
                 &format!("repository '{}/{}' not found", owner, name),
             )
-        })
+        })?;
+
+    // Block access to private repos via unauthenticated MCP tools
+    if repo.visibility != delta_core::models::repo::Visibility::Public {
+        return Err(error_result(
+            StatusCode::NOT_FOUND,
+            &format!("repository '{}/{}' not found", owner, name),
+        ));
+    }
+
+    Ok(repo)
 }
 
 // ---------------------------------------------------------------------------

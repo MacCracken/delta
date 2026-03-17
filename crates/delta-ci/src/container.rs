@@ -36,7 +36,7 @@ pub fn build_container_command(
     env_vars: &HashMap<String, String>,
 ) -> Command {
     let mut command = Command::new(runtime);
-    command.arg("run").arg("--rm").arg("--network=host");
+    command.arg("run").arg("--rm").arg("--network=none");
 
     // Mount work directory
     command

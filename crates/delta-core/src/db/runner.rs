@@ -62,14 +62,17 @@ pub async fn register(
     let now = Utc::now().to_rfc3339();
     let labels_str = labels.join(",");
 
+    // Only update labels/heartbeat on conflict — do NOT overwrite token_hash
+    // to prevent runner identity takeover. If the token changes, the runner
+    // must be deleted and re-registered by an admin.
     sqlx::query(
         "INSERT INTO runners (id, name, token_hash, labels, status, last_heartbeat_at, created_at)
          VALUES (?, ?, ?, ?, 'online', ?, ?)
          ON CONFLICT(name) DO UPDATE SET
-           token_hash = excluded.token_hash,
            labels = excluded.labels,
            status = 'online',
-           last_heartbeat_at = excluded.last_heartbeat_at",
+           last_heartbeat_at = excluded.last_heartbeat_at
+         WHERE runners.token_hash = excluded.token_hash",
     )
     .bind(&id)
     .bind(name)
@@ -242,13 +245,44 @@ pub async fn get_queued_job(pool: &SqlitePool, id: &str) -> Result<QueuedJob> {
     Ok(row.into_queued_job())
 }
 
-/// Mark a queued job as complete and remove it from the queue.
-pub async fn complete_queued_job(pool: &SqlitePool, queue_id: &str) -> Result<()> {
-    sqlx::query("UPDATE runner_job_queue SET status = 'completed' WHERE id = ?")
-        .bind(queue_id)
+/// Look up a queued job by its job_run_id (for ownership verification).
+pub async fn get_queued_job_by_job_run_id(pool: &SqlitePool, job_run_id: &str) -> Result<QueuedJob> {
+    let row = sqlx::query_as::<_, QueuedJobRow>(
+        "SELECT * FROM runner_job_queue WHERE job_run_id = ?",
+    )
+    .bind(job_run_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| DeltaError::Pipeline(e.to_string()))?
+    .ok_or_else(|| DeltaError::Pipeline("queued job not found".into()))?;
+    Ok(row.into_queued_job())
+}
+
+/// Set the runner name on a job_run record (via db module, not raw SQL).
+pub async fn set_job_runner(pool: &SqlitePool, job_id: &str, runner_name: &str) -> Result<()> {
+    sqlx::query("UPDATE job_runs SET runner = ? WHERE id = ?")
+        .bind(runner_name)
+        .bind(job_id)
         .execute(pool)
         .await
         .map_err(|e| DeltaError::Pipeline(e.to_string()))?;
+    Ok(())
+}
+
+/// Mark a queued job as complete. Validates the runner owns the job.
+pub async fn complete_queued_job(pool: &SqlitePool, queue_id: &str, runner_id: &str) -> Result<()> {
+    let result = sqlx::query(
+        "UPDATE runner_job_queue SET status = 'completed' WHERE id = ? AND claimed_by = ? AND status = 'claimed'",
+    )
+    .bind(queue_id)
+    .bind(runner_id)
+    .execute(pool)
+    .await
+    .map_err(|e| DeltaError::Pipeline(e.to_string()))?;
+
+    if result.rows_affected() == 0 {
+        return Err(DeltaError::Pipeline("cannot complete: job not claimed by this runner".into()));
+    }
     Ok(())
 }
 

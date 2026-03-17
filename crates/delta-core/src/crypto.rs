@@ -1,36 +1,72 @@
-//! Symmetric encryption for secrets storage using BLAKE3 keyed hashing + XOR stream cipher.
+//! Symmetric encryption for secrets storage using BLAKE3 keyed hashing.
 //!
-//! Uses BLAKE3 in keyed hash mode to derive a keystream, then XORs with plaintext.
-//! This avoids adding heavy crypto dependencies while providing confidentiality at rest.
-//! The nonce ensures each encryption produces unique ciphertext.
+//! Uses BLAKE3 in keyed hash mode to derive a keystream (CTR mode), then XORs
+//! with plaintext. An encrypt-then-MAC tag (BLAKE3 keyed hash of nonce||ciphertext)
+//! is appended to detect tampering.
+//!
+//! Wire format: hex(nonce[16] || ciphertext[N] || tag[32])
 
 use crate::{DeltaError, Result};
 
 /// Encrypt a plaintext value using the given key.
-/// Returns a hex-encoded string of `nonce || ciphertext`.
+/// Returns a hex-encoded string of `nonce || ciphertext || tag`.
 pub fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> String {
     let mut nonce = [0u8; 16];
     getrandom::fill(&mut nonce).expect("RNG failure");
 
     let ciphertext = xor_stream(key, &nonce, plaintext);
 
-    let mut out = Vec::with_capacity(16 + ciphertext.len());
+    // Encrypt-then-MAC: compute tag over nonce || ciphertext
+    let tag = compute_mac(key, &nonce, &ciphertext);
+
+    let mut out = Vec::with_capacity(16 + ciphertext.len() + 32);
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&ciphertext);
+    out.extend_from_slice(&tag);
     hex::encode(out)
 }
 
-/// Decrypt a hex-encoded `nonce || ciphertext` value using the given key.
+/// Decrypt a hex-encoded `nonce || ciphertext || tag` value using the given key.
+/// Returns an error if the tag is invalid (tampered or wrong key).
 pub fn decrypt(key: &[u8; 32], hex_input: &str) -> Result<String> {
     let raw = hex::decode(hex_input)
         .map_err(|e| DeltaError::Storage(format!("invalid secret encoding: {e}")))?;
 
-    if raw.len() < 16 {
+    // Minimum: 16 (nonce) + 0 (ciphertext) + 32 (tag) = 48
+    if raw.len() < 48 {
+        // Legacy format (no tag): 16 (nonce) + ciphertext, minimum 16 bytes
+        // Fall back to untagged decryption for backwards compatibility
+        if raw.len() >= 16 {
+            return decrypt_legacy(key, &raw);
+        }
         return Err(DeltaError::Storage("secret data too short".into()));
     }
 
-    let (nonce, ciphertext) = raw.split_at(16);
-    let nonce: [u8; 16] = nonce
+    let tag_start = raw.len() - 32;
+    let nonce: [u8; 16] = raw[..16]
+        .try_into()
+        .map_err(|_| DeltaError::Storage("invalid nonce".into()))?;
+    let ciphertext = &raw[16..tag_start];
+    let tag = &raw[tag_start..];
+
+    // Verify MAC before decrypting
+    let expected_tag = compute_mac(key, &nonce, ciphertext);
+    if !constant_time_eq(tag, &expected_tag) {
+        return Err(DeltaError::Storage(
+            "secret integrity check failed (wrong key or tampered data)".into(),
+        ));
+    }
+
+    let plaintext = xor_stream(key, &nonce, ciphertext);
+
+    String::from_utf8(plaintext)
+        .map_err(|e| DeltaError::Storage(format!("decrypted secret is not valid UTF-8: {e}")))
+}
+
+/// Decrypt legacy format (no MAC tag) for backwards compatibility.
+fn decrypt_legacy(key: &[u8; 32], raw: &[u8]) -> Result<String> {
+    let (nonce_bytes, ciphertext) = raw.split_at(16);
+    let nonce: [u8; 16] = nonce_bytes
         .try_into()
         .map_err(|_| DeltaError::Storage("invalid nonce".into()))?;
 
@@ -43,6 +79,28 @@ pub fn decrypt(key: &[u8; 32], hex_input: &str) -> Result<String> {
 /// Derive encryption key from a passphrase string using BLAKE3.
 pub fn derive_key(passphrase: &str) -> [u8; 32] {
     blake3::derive_key("delta-secrets-v1", passphrase.as_bytes())
+}
+
+/// Compute MAC over nonce || ciphertext using a derived MAC key.
+fn compute_mac(key: &[u8; 32], nonce: &[u8; 16], ciphertext: &[u8]) -> [u8; 32] {
+    // Derive a separate MAC key from the encryption key to avoid key reuse
+    let mac_key: [u8; 32] = blake3::derive_key("delta-secrets-mac-v1", key);
+    let mut hasher = blake3::Hasher::new_keyed(&mac_key);
+    hasher.update(nonce);
+    hasher.update(ciphertext);
+    *hasher.finalize().as_bytes()
+}
+
+/// Constant-time byte comparison.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 /// XOR stream cipher using BLAKE3 keyed hash as keystream generator.
@@ -109,14 +167,31 @@ mod tests {
     }
 
     #[test]
-    fn test_wrong_key_fails() {
+    fn test_wrong_key_fails_with_error() {
         let key1 = derive_key("key-one");
         let key2 = derive_key("key-two");
         let encrypted = encrypt(&key1, b"secret");
         let result = decrypt(&key2, &encrypted);
-        // Decryption "succeeds" but produces garbage — that's expected for XOR cipher
-        // The important thing is it doesn't produce the original plaintext
-        assert_ne!(result.unwrap_or_default(), "secret");
+        // With MAC, wrong key should produce an integrity error
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("integrity check failed"));
+    }
+
+    #[test]
+    fn test_tampered_ciphertext_fails() {
+        let key = derive_key("key");
+        let encrypted = encrypt(&key, b"secret");
+        let mut raw = hex::decode(&encrypted).unwrap();
+        // Flip a byte in the ciphertext (after nonce, before tag)
+        if raw.len() > 20 {
+            raw[18] ^= 0xFF;
+        }
+        let tampered = hex::encode(raw);
+        let result = decrypt(&key, &tampered);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -165,7 +240,7 @@ mod tests {
         let repo_key = generate_repo_key();
 
         let wrapped = wrap_repo_key(&key1, &repo_key);
-        let unwrapped = unwrap_repo_key(&key2, &wrapped).unwrap_or_default();
-        assert_ne!(unwrapped, repo_key);
+        let result = unwrap_repo_key(&key2, &wrapped);
+        assert!(result.is_err()); // Now properly fails instead of silently decrypting to garbage
     }
 }

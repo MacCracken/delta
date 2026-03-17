@@ -24,7 +24,7 @@ pub struct JobPayload {
     pub job_name: String,
     /// The steps to execute in order.
     pub steps: Vec<StepPayload>,
-    /// Environment variables to inject (includes secrets, DELTA_* vars, MATRIX_* vars).
+    /// Environment variables to inject (DELTA_* vars, MATRIX_* vars only — secrets excluded).
     pub env: HashMap<String, String>,
     /// Git clone URL for the repository.
     pub clone_url: Option<String>,

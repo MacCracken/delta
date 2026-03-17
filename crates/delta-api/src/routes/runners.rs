@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 use crate::extractors::AuthUser;
 use crate::state::AppState;
 
+/// Maximum size of a single step log output (1 MB).
+const MAX_STEP_LOG_SIZE: usize = 1_048_576;
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/register", post(register_runner))
@@ -50,8 +53,10 @@ async fn authenticate_runner(
         .and_then(|v| v.to_str().ok())
         .ok_or((StatusCode::UNAUTHORIZED, "missing X-Runner-Token header".into()))?;
 
-    // Token must start with the shared runner_token prefix for initial validation
-    if !token.starts_with(runner_token) {
+    // Constant-time comparison of the shared runner token
+    if token.len() < runner_token.len()
+        || !constant_time_eq(runner_token.as_bytes(), &token.as_bytes()[..runner_token.len()])
+    {
         return Err((StatusCode::UNAUTHORIZED, "invalid runner token".into()));
     }
 
@@ -65,6 +70,38 @@ async fn authenticate_runner(
 
 fn hash_token(token: &str) -> String {
     blake3::hash(token.as_bytes()).to_hex().to_string()
+}
+
+/// Constant-time byte comparison to prevent timing attacks.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// Verify that a runner has claimed a specific job via the queue.
+async fn verify_runner_owns_job(
+    pool: &sqlx::SqlitePool,
+    runner_id: &str,
+    job_id: &str,
+) -> Result<db::runner::QueuedJob, (StatusCode, String)> {
+    let queued = db::runner::get_queued_job_by_job_run_id(pool, job_id)
+        .await
+        .map_err(|_| (StatusCode::NOT_FOUND, "job not found in runner queue".into()))?;
+
+    if queued.claimed_by.as_deref() != Some(runner_id) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "this runner has not claimed this job".into(),
+        ));
+    }
+
+    Ok(queued)
 }
 
 // --- Registration ---
@@ -109,8 +146,13 @@ async fn register_runner(
         "runner support not configured (set ci.runner_token)".into(),
     ))?;
 
-    // Validate the shared runner token prefix
-    if !req.token.starts_with(runner_token) {
+    // Constant-time validation of the shared runner token prefix
+    if req.token.len() < runner_token.len()
+        || !constant_time_eq(
+            runner_token.as_bytes(),
+            &req.token.as_bytes()[..runner_token.len()],
+        )
+    {
         return Err((StatusCode::UNAUTHORIZED, "invalid runner token".into()));
     }
 
@@ -129,6 +171,29 @@ async fn register_runner(
         ));
     }
 
+    // Validate labels: no commas, max 64 chars each, max 16 labels
+    if req.labels.len() > 16 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "maximum 16 labels per runner".into(),
+        ));
+    }
+    for label in &req.labels {
+        if label.is_empty()
+            || label.len() > 64
+            || label.contains(',')
+            || !label
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+        {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "labels must be 1-64 alphanumeric characters, hyphens, underscores, or dots"
+                    .into(),
+            ));
+        }
+    }
+
     let token_hash = hash_token(&req.token);
     let runner = db::runner::register(&state.db, &req.name, &token_hash, &req.labels)
         .await
@@ -145,12 +210,14 @@ async fn register_runner(
     Ok((StatusCode::CREATED, Json(runner.into())))
 }
 
-// --- List runners (admin only) ---
+// --- List runners (admin only — requires first user / site admin) ---
 
 async fn list_runners(
     State(state): State<AppState>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
 ) -> Result<Json<Vec<RunnerResponse>>, (StatusCode, String)> {
+    crate::helpers::require_site_admin(&state, &user).await?;
+
     let runners = db::runner::list(&state.db).await.map_err(|e| {
         tracing::error!("failed to list runners: {}", e);
         (
@@ -167,8 +234,10 @@ async fn list_runners(
 async fn remove_runner(
     State(state): State<AppState>,
     axum::extract::Path(runner_id): axum::extract::Path<String>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    crate::helpers::require_site_admin(&state, &user).await?;
+
     db::runner::delete(&state.db, &runner_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
@@ -249,7 +318,10 @@ async fn start_job(
 ) -> Result<StatusCode, (StatusCode, String)> {
     let runner = authenticate_runner(&state, &headers).await?;
 
-    // Mark the job_run as running with this runner's name
+    // Verify this runner has claimed this job
+    let _queued = verify_runner_owns_job(&state.db, &runner.id, &job_id).await?;
+
+    // Mark the job_run as running
     db::pipeline::update_job_status(
         &state.db,
         &job_id,
@@ -260,10 +332,7 @@ async fn start_job(
     .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
 
     // Update the runner field on the job
-    sqlx::query("UPDATE job_runs SET runner = ? WHERE id = ?")
-        .bind(&runner.name)
-        .bind(&job_id)
-        .execute(&state.db)
+    db::runner::set_job_runner(&state.db, &job_id, &runner.name)
         .await
         .map_err(|e| {
             tracing::error!("failed to set runner on job: {}", e);
@@ -273,12 +342,12 @@ async fn start_job(
             )
         })?;
 
-    // Emit event to pipeline stream
-    if let Some(pipeline_id) = get_pipeline_id_for_job(&state.db, &job_id).await
-        && let Some(sender) = state.pipeline_streams.get(&pipeline_id)
+    // Emit event to pipeline stream — use actual job name from the DB
+    if let Ok(job) = db::pipeline::get_job(&state.db, &job_id).await
+        && let Some(sender) = state.pipeline_streams.get(&job.pipeline_id)
     {
         let _ = sender.send(delta_ci::PipelineEvent::JobStarted {
-            job_name: runner.name.clone(),
+            job_name: job.job_name,
             job_id: job_id.clone(),
         });
     }
@@ -302,14 +371,29 @@ async fn submit_step_log(
     headers: axum::http::HeaderMap,
     Json(req): Json<StepLogRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let _runner = authenticate_runner(&state, &headers).await?;
+    let runner = authenticate_runner(&state, &headers).await?;
+
+    // Verify this runner has claimed this job
+    let queued = verify_runner_owns_job(&state.db, &runner.id, &job_id).await?;
+
+    // Enforce output size limit
+    let output = if req.output.len() > MAX_STEP_LOG_SIZE {
+        let mut truncated = req.output[..MAX_STEP_LOG_SIZE].to_string();
+        truncated.push_str("\n... [output truncated at 1 MB]");
+        truncated
+    } else {
+        req.output
+    };
+
+    // Mask secrets in the output
+    let masked_output = mask_secrets_for_job(&state, &queued.repo_id, &output).await;
 
     db::pipeline::append_step_log(
         &state.db,
         &job_id,
         &req.step_name,
         req.step_index,
-        &req.output,
+        &masked_output,
         &req.status,
     )
     .await
@@ -357,21 +441,38 @@ async fn complete_job(
     headers: axum::http::HeaderMap,
     Json(req): Json<CompleteJobRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let _runner = authenticate_runner(&state, &headers).await?;
+    let runner = authenticate_runner(&state, &headers).await?;
 
-    // Store step logs from the runner
+    // Verify this runner has claimed this job AND the queue_id matches
+    let queued = verify_runner_owns_job(&state.db, &runner.id, &job_id).await?;
+    if queued.id != req.queue_id {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "queue_id does not match this job".into(),
+        ));
+    }
+
+    // Store step logs from the runner with secret masking
     for (idx, step) in req.steps.iter().enumerate() {
         let status = if step.exit_code == 0 {
             "passed"
         } else {
             "failed"
         };
+        let output = if step.output.len() > MAX_STEP_LOG_SIZE {
+            let mut truncated = step.output[..MAX_STEP_LOG_SIZE].to_string();
+            truncated.push_str("\n... [output truncated at 1 MB]");
+            truncated
+        } else {
+            step.output.clone()
+        };
+        let masked_output = mask_secrets_for_job(&state, &queued.repo_id, &output).await;
         let _ = db::pipeline::append_step_log(
             &state.db,
             &job_id,
             &step.name,
             idx as i64,
-            &step.output,
+            &masked_output,
             status,
         )
         .await;
@@ -395,8 +496,8 @@ async fn complete_job(
             )
         })?;
 
-    // Mark queued job as complete
-    let _ = db::runner::complete_queued_job(&state.db, &req.queue_id).await;
+    // Mark queued job as complete (with status guard)
+    let _ = db::runner::complete_queued_job(&state.db, &req.queue_id, &runner.id).await;
 
     // Emit job completed event to pipeline stream
     if let Some(pipeline_id) = get_pipeline_id_for_job(&state.db, &job_id).await {
@@ -420,6 +521,25 @@ async fn complete_job(
 async fn get_pipeline_id_for_job(pool: &sqlx::SqlitePool, job_id: &str) -> Option<String> {
     let job = db::pipeline::get_job(pool, job_id).await.ok()?;
     Some(job.pipeline_id)
+}
+
+/// Mask secret values in output text for a given repo.
+async fn mask_secrets_for_job(state: &AppState, repo_id: &str, output: &str) -> String {
+    let encryption_key = delta_core::crypto::derive_key(&state.config.auth.secrets_key);
+    let secrets = match db::secret::get_all_values(&state.db, repo_id).await {
+        Ok(s) => s,
+        Err(_) => return output.to_string(),
+    };
+
+    let mut masked = output.to_string();
+    for (_, encrypted_value) in &secrets {
+        if let Ok(value) = delta_core::crypto::decrypt(&encryption_key, encrypted_value)
+            && !value.is_empty()
+        {
+            masked = masked.replace(&value, "***");
+        }
+    }
+    masked
 }
 
 /// Check if all jobs in a pipeline are terminal (passed/failed/cancelled).
@@ -465,3 +585,4 @@ async fn finalize_pipeline_if_done(
     }
     streams.remove(pipeline_id);
 }
+

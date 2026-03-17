@@ -70,8 +70,6 @@ async fn list_audit_log(
 
 #[derive(Deserialize)]
 struct ExportQuery {
-    since: Option<String>,
-    until: Option<String>,
     resource_type: Option<String>,
     #[serde(default = "default_export_limit")]
     limit: i64,
@@ -92,15 +90,16 @@ fn default_format() -> String {
 
 async fn export_audit_logs(
     State(state): State<AppState>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
     Query(params): Query<ExportQuery>,
 ) -> Result<axum::response::Response, (StatusCode, String)> {
+    // Scope export to the requesting user's own audit logs only
+    let own_id = user.id.to_string();
     let limit = params.limit.min(100000);
 
-    let entries = db::audit::list_for_export(
+    let entries = db::audit::list(
         &state.db,
-        params.since.as_deref(),
-        params.until.as_deref(),
+        Some(&own_id),
         params.resource_type.as_deref(),
         limit,
         params.offset,
@@ -114,14 +113,7 @@ async fn export_audit_logs(
         )
     })?;
 
-    let total = db::audit::count_for_export(
-        &state.db,
-        params.since.as_deref(),
-        params.until.as_deref(),
-        params.resource_type.as_deref(),
-    )
-    .await
-    .unwrap_or(0);
+    let total = entries.len() as i64;
 
     // Compute BLAKE3 integrity hash over the export data
     let json_bytes = serde_json::to_vec(&entries).unwrap_or_default();

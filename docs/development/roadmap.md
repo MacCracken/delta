@@ -12,6 +12,22 @@ Items below are not planned for any phase. They will be prioritized if there is 
 - [ ] Desktop app (Tauri webview shell wrapping the web UI)
 - [ ] Email notifications for pipeline failures
 - [ ] IDE extensions (VS Code, Zed)
+- [ ] Enforce token scopes in AuthUser extractor (scopes stored but not checked)
+
+## Engineering Backlog
+
+Low-priority improvements identified during security audit (2026.3.16):
+
+- [ ] Cap pipeline step log accumulation (prevent OOM from verbose workflows)
+- [ ] Propagate RNG errors in crypto.rs instead of panicking
+- [ ] CSV formula injection protection in audit export (escape =, +, -, @)
+- [ ] Account registration limits / email verification
+- [ ] OCI tag/reference name validation
+- [ ] Request body size limits on Bytes endpoints (git, LFS, OCI)
+- [ ] Pagination on runner list endpoint
+- [ ] Runner stale-job cleanup (re-queue claimed jobs after heartbeat timeout)
+- [ ] Seccomp filter support for aarch64 (currently x86_64 only)
+- [ ] Password max-length validation (Argon2 DoS prevention)
 
 ---
 

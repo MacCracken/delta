@@ -67,6 +67,24 @@ pub async fn resolve_repo_authed(
     Ok((repo, owner_user))
 }
 
+/// Require the user to be a site admin (first registered user).
+pub async fn require_site_admin(
+    state: &AppState,
+    user: &User,
+) -> Result<(), (StatusCode, String)> {
+    let is_first =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE id < ?")
+            .bind(user.id.to_string())
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(1);
+
+    if is_first > 0 {
+        return Err((StatusCode::FORBIDDEN, "admin access required".into()));
+    }
+    Ok(())
+}
+
 /// Check whether the user is the repo owner or has the required collaborator role.
 /// Returns Ok(()) if authorized, Err(403) otherwise.
 pub async fn require_role(

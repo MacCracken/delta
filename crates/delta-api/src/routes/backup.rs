@@ -30,8 +30,9 @@ struct BackupStatus {
 
 async fn backup_status(
     State(state): State<AppState>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
 ) -> Result<Json<BackupStatus>, (StatusCode, String)> {
+    crate::helpers::require_site_admin(&state, &user).await?;
     let repos_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM repositories")
         .fetch_one(&state.db)
         .await
@@ -76,8 +77,9 @@ async fn backup_status(
 
 async fn create_snapshot(
     State(state): State<AppState>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    crate::helpers::require_site_admin(&state, &user).await?;
     // For SQLite: use VACUUM INTO to create a consistent snapshot
     if state.config.storage.db_url.contains("sqlite") {
         let backup_dir = state.config.storage.artifacts_dir.join("backups");

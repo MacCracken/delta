@@ -70,6 +70,8 @@ fn not_found(msg: &str) -> (StatusCode, String) {
 }
 
 /// Resolve repo and get the on-disk path.
+/// Only returns public repos — private repos are hidden from the web UI
+/// (which has no authentication context).
 async fn resolve_repo_path(
     state: &AppState,
     owner: &str,
@@ -82,6 +84,12 @@ async fn resolve_repo_path(
     let repo_record = db::repo::get_by_owner_and_name(&state.db, &owner_id, repo)
         .await
         .map_err(|_| not_found("repository not found"))?;
+
+    // Block access to non-public repos in the unauthenticated web UI
+    if repo_record.visibility != delta_core::models::repo::Visibility::Public {
+        return Err(not_found("repository not found"));
+    }
+
     let repo_path = state
         .repo_host
         .repo_path(owner, repo)
@@ -880,6 +888,7 @@ async fn user_profile(State(state): State<AppState>, Path(username): Path<String
 
     let repo_entries: Vec<delta_web::user::RepoEntry> = repos
         .iter()
+        .filter(|r| r.visibility == delta_core::models::repo::Visibility::Public)
         .map(|r| delta_web::user::RepoEntry {
             name: r.name.clone(),
             description: r.description.clone(),
