@@ -189,6 +189,10 @@ async fn list_forks(
 
     let mut responses = Vec::new();
     for fork in forks {
+        // Only show public forks (private forks are hidden)
+        if fork.visibility != Visibility::Public {
+            continue;
+        }
         let fork_owner = db::user::get_by_id(&state.db, &fork.owner)
             .await
             .map(|u| u.username)

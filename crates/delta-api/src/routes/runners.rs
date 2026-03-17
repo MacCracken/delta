@@ -370,6 +370,14 @@ async fn submit_step_log(
 ) -> Result<StatusCode, (StatusCode, String)> {
     let runner = authenticate_runner(&state, &headers).await?;
 
+    // Validate input
+    if req.step_name.len() > 256 {
+        return Err((StatusCode::BAD_REQUEST, "step_name too long (max 256)".into()));
+    }
+    if req.step_index < 0 || req.step_index > 1000 {
+        return Err((StatusCode::BAD_REQUEST, "step_index must be 0-1000".into()));
+    }
+
     // Verify this runner has claimed this job
     let queued = verify_runner_owns_job(&state.db, &runner.id, &job_id).await?;
 

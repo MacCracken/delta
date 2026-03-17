@@ -36,12 +36,22 @@ pub fn build_container_command(
     env_vars: &HashMap<String, String>,
 ) -> Command {
     let mut command = Command::new(runtime);
-    command.arg("run").arg("--rm").arg("--network=none");
+    command
+        .arg("run")
+        .arg("--rm")
+        .arg("--network=none")
+        .arg("--cap-drop=ALL")
+        .arg("--security-opt=no-new-privileges")
+        .arg("--read-only")
+        .arg("--pids-limit=256")
+        .arg("--memory=512m")
+        .arg("--user=65534:65534"); // nobody:nogroup
 
-    // Mount work directory
+    // Mount work directory and a writable /tmp
     command
         .arg("-v")
         .arg(format!("{}:/workspace", work_dir.display()));
+    command.arg("--tmpfs").arg("/tmp:rw,noexec,nosuid,size=64m");
     command.arg("-w").arg("/workspace");
 
     // Pass environment variables

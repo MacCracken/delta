@@ -33,6 +33,10 @@ Low-priority improvements identified during security audit (2026.3.16):
 - [ ] MCP workspace handlers: verify workspace creator ownership
 - [ ] Migrate legacy encrypted secrets (no MAC) → new format with MAC
 - [ ] Empty queue_id fallback: pre-allocate queue ID before building payload
+- [ ] Runner shared-token model: consider per-runner unique tokens for isolation
+- [ ] Pipeline finalization race: atomic check-and-update to avoid dropped events
+- [ ] Admin promotion/demotion API endpoint (currently requires direct DB access)
+- [ ] Step log errors: propagate instead of silently swallowing in complete_job
 
 ---
 

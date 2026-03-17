@@ -542,12 +542,33 @@ async fn handle_create_workspace(state: &AppState, args: &serde_json::Value) -> 
     let base_branch = arg_str(args, "base_branch");
     let ttl_hours = args.get("ttl_hours").and_then(|v| v.as_i64()).unwrap_or(24);
 
+    // Validate workspace name (same rules as REST API)
+    if ws_name.is_empty()
+        || ws_name.len() > 128
+        || !ws_name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(error_result(
+            StatusCode::BAD_REQUEST,
+            "workspace name must be 1-128 alphanumeric characters, hyphens, or underscores",
+        ));
+    }
+
     let owner_user = db::user::get_by_username(&state.db, owner)
         .await
         .map_err(|_| error_result(StatusCode::NOT_FOUND, &format!("user '{}' not found", owner)))?;
     let repo = db::repo::get_by_owner_and_name(&state.db, &owner_user.id.to_string(), name)
         .await
         .map_err(|_| error_result(StatusCode::NOT_FOUND, &format!("repository '{}/{}' not found", owner, name)))?;
+
+    // Check access: user must be the owner or a collaborator
+    if user.id != owner_user.id {
+        let role = db::collaborator::get_role(&state.db, &repo.id.to_string(), &user.id.to_string())
+            .await
+            .unwrap_or(None);
+        if role.is_none() {
+            return Err(error_result(StatusCode::NOT_FOUND, &format!("repository '{}/{}' not found", owner, name)));
+        }
+    }
 
     let ttl = ttl_hours.clamp(1, 168);
     let base = base_branch.unwrap_or(&repo.default_branch);
@@ -594,6 +615,11 @@ async fn handle_workspace_write_files(state: &AppState, args: &serde_json::Value
     let ws = db::workspace::get_by_id(&state.db, ws_id)
         .await
         .map_err(|e| error_result(StatusCode::NOT_FOUND, &e.to_string()))?;
+
+    // Verify the authenticated user created this workspace
+    if ws.creator_id != user.id.to_string() {
+        return Err(error_result(StatusCode::FORBIDDEN, "you do not own this workspace"));
+    }
 
     if ws.status != delta_core::models::workspace::WorkspaceStatus::Active {
         return Err(error_result(StatusCode::CONFLICT, "workspace is not active"));
@@ -647,7 +673,7 @@ async fn handle_workspace_write_files(state: &AppState, args: &serde_json::Value
 }
 
 async fn handle_workspace_trigger_pipeline(state: &AppState, args: &serde_json::Value) -> ToolResult {
-    let _user = authenticate_mcp(state, args).await?;
+    let user = authenticate_mcp(state, args).await?;
     let owner = require_str(args, "owner")?;
     let name = require_str(args, "name")?;
     let ws_id = require_str(args, "workspace_id")?;
@@ -657,6 +683,10 @@ async fn handle_workspace_trigger_pipeline(state: &AppState, args: &serde_json::
     let ws = db::workspace::get_by_id(&state.db, ws_id)
         .await
         .map_err(|e| error_result(StatusCode::NOT_FOUND, &e.to_string()))?;
+
+    if ws.creator_id != user.id.to_string() {
+        return Err(error_result(StatusCode::FORBIDDEN, "you do not own this workspace"));
+    }
 
     if ws.status != delta_core::models::workspace::WorkspaceStatus::Active {
         return Err(error_result(StatusCode::CONFLICT, "workspace is not active"));
@@ -714,7 +744,7 @@ async fn handle_workspace_create_pull(state: &AppState, args: &serde_json::Value
 }
 
 async fn handle_workspace_status(state: &AppState, args: &serde_json::Value) -> ToolResult {
-    let _user = authenticate_mcp(state, args).await?;
+    let user = authenticate_mcp(state, args).await?;
     let owner = require_str(args, "owner")?;
     let name = require_str(args, "name")?;
     let ws_id = require_str(args, "workspace_id")?;
@@ -726,6 +756,10 @@ async fn handle_workspace_status(state: &AppState, args: &serde_json::Value) -> 
 
     if ws.repo_id != repo.id.to_string() {
         return Err(error_result(StatusCode::NOT_FOUND, "workspace not found in this repository"));
+    }
+
+    if ws.creator_id != user.id.to_string() {
+        return Err(error_result(StatusCode::FORBIDDEN, "you do not own this workspace"));
     }
 
     ok_json(&serde_json::json!({
