@@ -166,7 +166,9 @@ async fn list_tools() -> Json<McpToolManifest> {
             },
             McpToolDescription {
                 name: "delta_create_workspace".into(),
-                description: "Create a remote agent workspace for isolated development on a repository".into(),
+                description:
+                    "Create a remote agent workspace for isolated development on a repository"
+                        .into(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -273,9 +275,15 @@ async fn call_tool(
         "delta_read_file" => handle_read_file(&state, &call.arguments).await,
         "delta_list_tree" => handle_list_tree(&state, &call.arguments).await,
         "delta_create_workspace" => handle_create_workspace(&state, &call.arguments).await,
-        "delta_workspace_write_files" => handle_workspace_write_files(&state, &call.arguments).await,
-        "delta_workspace_trigger_pipeline" => handle_workspace_trigger_pipeline(&state, &call.arguments).await,
-        "delta_workspace_create_pull" => handle_workspace_create_pull(&state, &call.arguments).await,
+        "delta_workspace_write_files" => {
+            handle_workspace_write_files(&state, &call.arguments).await
+        }
+        "delta_workspace_trigger_pipeline" => {
+            handle_workspace_trigger_pipeline(&state, &call.arguments).await
+        }
+        "delta_workspace_create_pull" => {
+            handle_workspace_create_pull(&state, &call.arguments).await
+        }
         "delta_workspace_status" => handle_workspace_status(&state, &call.arguments).await,
         _ => Err(error_result(
             StatusCode::BAD_REQUEST,
@@ -545,7 +553,9 @@ async fn handle_create_workspace(state: &AppState, args: &serde_json::Value) -> 
     // Validate workspace name (same rules as REST API)
     if ws_name.is_empty()
         || ws_name.len() > 128
-        || !ws_name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        || !ws_name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
         return Err(error_result(
             StatusCode::BAD_REQUEST,
@@ -555,18 +565,32 @@ async fn handle_create_workspace(state: &AppState, args: &serde_json::Value) -> 
 
     let owner_user = db::user::get_by_username(&state.db, owner)
         .await
-        .map_err(|_| error_result(StatusCode::NOT_FOUND, &format!("user '{}' not found", owner)))?;
+        .map_err(|_| {
+            error_result(
+                StatusCode::NOT_FOUND,
+                &format!("user '{}' not found", owner),
+            )
+        })?;
     let repo = db::repo::get_by_owner_and_name(&state.db, &owner_user.id.to_string(), name)
         .await
-        .map_err(|_| error_result(StatusCode::NOT_FOUND, &format!("repository '{}/{}' not found", owner, name)))?;
+        .map_err(|_| {
+            error_result(
+                StatusCode::NOT_FOUND,
+                &format!("repository '{}/{}' not found", owner, name),
+            )
+        })?;
 
     // Check access: user must be the owner or a collaborator
     if user.id != owner_user.id {
-        let role = db::collaborator::get_role(&state.db, &repo.id.to_string(), &user.id.to_string())
-            .await
-            .unwrap_or(None);
+        let role =
+            db::collaborator::get_role(&state.db, &repo.id.to_string(), &user.id.to_string())
+                .await
+                .unwrap_or(None);
         if role.is_none() {
-            return Err(error_result(StatusCode::NOT_FOUND, &format!("repository '{}/{}' not found", owner, name)));
+            return Err(error_result(
+                StatusCode::NOT_FOUND,
+                &format!("repository '{}/{}' not found", owner, name),
+            ));
         }
     }
 
@@ -575,7 +599,9 @@ async fn handle_create_workspace(state: &AppState, args: &serde_json::Value) -> 
     let short_id = &uuid::Uuid::new_v4().to_string()[..8];
     let branch_name = format!("ws/{}/{}", short_id, ws_name);
 
-    let repo_path = state.repo_host.repo_path(owner, name)
+    let repo_path = state
+        .repo_host
+        .repo_path(owner, name)
         .map_err(|e| error_result(StatusCode::BAD_REQUEST, &e.to_string()))?;
 
     let base_commit = delta_vcs::workspace::create_workspace_branch(&repo_path, &branch_name, base)
@@ -618,20 +644,29 @@ async fn handle_workspace_write_files(state: &AppState, args: &serde_json::Value
 
     // Verify the authenticated user created this workspace
     if ws.creator_id != user.id.to_string() {
-        return Err(error_result(StatusCode::FORBIDDEN, "you do not own this workspace"));
+        return Err(error_result(
+            StatusCode::FORBIDDEN,
+            "you do not own this workspace",
+        ));
     }
 
     if ws.status != delta_core::models::workspace::WorkspaceStatus::Active {
-        return Err(error_result(StatusCode::CONFLICT, "workspace is not active"));
+        return Err(error_result(
+            StatusCode::CONFLICT,
+            "workspace is not active",
+        ));
     }
 
-    let files_val = args.get("files")
+    let files_val = args
+        .get("files")
         .and_then(|v| v.as_array())
         .ok_or_else(|| error_result(StatusCode::BAD_REQUEST, "missing required argument: files"))?;
 
     let mut file_writes = Vec::new();
     for f in files_val {
-        let path = f.get("path").and_then(|v| v.as_str())
+        let path = f
+            .get("path")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| error_result(StatusCode::BAD_REQUEST, "file entry missing 'path'"))?;
         let action = f.get("action").and_then(|v| v.as_str());
         if action == Some("delete") {
@@ -640,10 +675,17 @@ async fn handle_workspace_write_files(state: &AppState, args: &serde_json::Value
                 content: None,
             });
         } else {
-            let content_b64 = f.get("content").and_then(|v| v.as_str())
-                .ok_or_else(|| error_result(StatusCode::BAD_REQUEST, &format!("missing content for '{}'", path)))?;
-            let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, content_b64)
-                .map_err(|e| error_result(StatusCode::BAD_REQUEST, &format!("invalid base64: {}", e)))?;
+            let content_b64 = f.get("content").and_then(|v| v.as_str()).ok_or_else(|| {
+                error_result(
+                    StatusCode::BAD_REQUEST,
+                    &format!("missing content for '{}'", path),
+                )
+            })?;
+            let decoded =
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, content_b64)
+                    .map_err(|e| {
+                        error_result(StatusCode::BAD_REQUEST, &format!("invalid base64: {}", e))
+                    })?;
             file_writes.push(delta_vcs::workspace::FileWrite {
                 path: path.to_string(),
                 content: Some(decoded),
@@ -651,10 +693,13 @@ async fn handle_workspace_write_files(state: &AppState, args: &serde_json::Value
         }
     }
 
-    let repo_path = state.repo_host.repo_path(owner, name)
+    let repo_path = state
+        .repo_host
+        .repo_path(owner, name)
         .map_err(|e| error_result(StatusCode::BAD_REQUEST, &e.to_string()))?;
 
-    let lock = state.workspace_locks
+    let lock = state
+        .workspace_locks
         .entry(ws_id.to_string())
         .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
         .clone();
@@ -662,7 +707,12 @@ async fn handle_workspace_write_files(state: &AppState, args: &serde_json::Value
 
     let author_name = user.display_name.as_deref().unwrap_or(&user.username);
     let commit_sha = delta_vcs::workspace::commit_workspace_files(
-        &repo_path, &ws.branch, &file_writes, message, author_name, &user.email,
+        &repo_path,
+        &ws.branch,
+        &file_writes,
+        message,
+        author_name,
+        &user.email,
     )
     .await
     .map_err(|e| error_result(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -672,7 +722,10 @@ async fn handle_workspace_write_files(state: &AppState, args: &serde_json::Value
     ok_json(&serde_json::json!({ "commit_sha": commit_sha }))
 }
 
-async fn handle_workspace_trigger_pipeline(state: &AppState, args: &serde_json::Value) -> ToolResult {
+async fn handle_workspace_trigger_pipeline(
+    state: &AppState,
+    args: &serde_json::Value,
+) -> ToolResult {
     let user = authenticate_mcp(state, args).await?;
     let owner = require_str(args, "owner")?;
     let name = require_str(args, "name")?;
@@ -682,18 +735,32 @@ async fn handle_workspace_trigger_pipeline(state: &AppState, args: &serde_json::
     // Look up repo directly (supports private repos for authenticated workspace users)
     let owner_user = db::user::get_by_username(&state.db, owner)
         .await
-        .map_err(|_| error_result(StatusCode::NOT_FOUND, &format!("user '{}' not found", owner)))?;
+        .map_err(|_| {
+            error_result(
+                StatusCode::NOT_FOUND,
+                &format!("user '{}' not found", owner),
+            )
+        })?;
     let repo = db::repo::get_by_owner_and_name(&state.db, &owner_user.id.to_string(), name)
         .await
-        .map_err(|_| error_result(StatusCode::NOT_FOUND, &format!("repository '{}/{}' not found", owner, name)))?;
+        .map_err(|_| {
+            error_result(
+                StatusCode::NOT_FOUND,
+                &format!("repository '{}/{}' not found", owner, name),
+            )
+        })?;
 
     // Verify user is owner or collaborator
     if user.id != owner_user.id {
-        let role = db::collaborator::get_role(&state.db, &repo.id.to_string(), &user.id.to_string())
-            .await
-            .unwrap_or(None);
+        let role =
+            db::collaborator::get_role(&state.db, &repo.id.to_string(), &user.id.to_string())
+                .await
+                .unwrap_or(None);
         if role.is_none() {
-            return Err(error_result(StatusCode::NOT_FOUND, &format!("repository '{}/{}' not found", owner, name)));
+            return Err(error_result(
+                StatusCode::NOT_FOUND,
+                &format!("repository '{}/{}' not found", owner, name),
+            ));
         }
     }
 
@@ -702,16 +769,27 @@ async fn handle_workspace_trigger_pipeline(state: &AppState, args: &serde_json::
         .map_err(|e| error_result(StatusCode::NOT_FOUND, &e.to_string()))?;
 
     if ws.creator_id != user.id.to_string() {
-        return Err(error_result(StatusCode::FORBIDDEN, "you do not own this workspace"));
+        return Err(error_result(
+            StatusCode::FORBIDDEN,
+            "you do not own this workspace",
+        ));
     }
 
     if ws.status != delta_core::models::workspace::WorkspaceStatus::Active {
-        return Err(error_result(StatusCode::CONFLICT, "workspace is not active"));
+        return Err(error_result(
+            StatusCode::CONFLICT,
+            "workspace is not active",
+        ));
     }
 
     let commit_sha = ws.head_commit.as_deref().unwrap_or(&ws.base_commit);
     let run = db::pipeline::create_pipeline(
-        &state.db, &repo.id.to_string(), workflow_name, "workspace", Some(&ws.branch), commit_sha,
+        &state.db,
+        &repo.id.to_string(),
+        workflow_name,
+        "workspace",
+        Some(&ws.branch),
+        commit_sha,
     )
     .await
     .map_err(|e| error_result(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -730,23 +808,40 @@ async fn handle_workspace_create_pull(state: &AppState, args: &serde_json::Value
     let ws_id = require_str(args, "workspace_id")?;
     let title = require_str(args, "title")?;
     let body = arg_str(args, "body");
-    let is_draft = args.get("is_draft").and_then(|v| v.as_bool()).unwrap_or(false);
+    let is_draft = args
+        .get("is_draft")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     // Look up repo directly (supports private repos for authenticated workspace users)
     let owner_user = db::user::get_by_username(&state.db, owner)
         .await
-        .map_err(|_| error_result(StatusCode::NOT_FOUND, &format!("user '{}' not found", owner)))?;
+        .map_err(|_| {
+            error_result(
+                StatusCode::NOT_FOUND,
+                &format!("user '{}' not found", owner),
+            )
+        })?;
     let repo = db::repo::get_by_owner_and_name(&state.db, &owner_user.id.to_string(), name)
         .await
-        .map_err(|_| error_result(StatusCode::NOT_FOUND, &format!("repository '{}/{}' not found", owner, name)))?;
+        .map_err(|_| {
+            error_result(
+                StatusCode::NOT_FOUND,
+                &format!("repository '{}/{}' not found", owner, name),
+            )
+        })?;
 
     // Verify user is owner or collaborator
     if user.id != owner_user.id {
-        let role = db::collaborator::get_role(&state.db, &repo.id.to_string(), &user.id.to_string())
-            .await
-            .unwrap_or(None);
+        let role =
+            db::collaborator::get_role(&state.db, &repo.id.to_string(), &user.id.to_string())
+                .await
+                .unwrap_or(None);
         if role.is_none() {
-            return Err(error_result(StatusCode::NOT_FOUND, &format!("repository '{}/{}' not found", owner, name)));
+            return Err(error_result(
+                StatusCode::NOT_FOUND,
+                &format!("repository '{}/{}' not found", owner, name),
+            ));
         }
     }
 
@@ -789,11 +884,17 @@ async fn handle_workspace_status(state: &AppState, args: &serde_json::Value) -> 
         .map_err(|e| error_result(StatusCode::NOT_FOUND, &e.to_string()))?;
 
     if ws.repo_id != repo.id.to_string() {
-        return Err(error_result(StatusCode::NOT_FOUND, "workspace not found in this repository"));
+        return Err(error_result(
+            StatusCode::NOT_FOUND,
+            "workspace not found in this repository",
+        ));
     }
 
     if ws.creator_id != user.id.to_string() {
-        return Err(error_result(StatusCode::FORBIDDEN, "you do not own this workspace"));
+        return Err(error_result(
+            StatusCode::FORBIDDEN,
+            "you do not own this workspace",
+        ));
     }
 
     ok_json(&serde_json::json!({

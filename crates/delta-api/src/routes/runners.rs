@@ -42,17 +42,28 @@ async fn authenticate_runner(
     let name = headers
         .get("x-runner-name")
         .and_then(|v| v.to_str().ok())
-        .ok_or((StatusCode::UNAUTHORIZED, "missing X-Runner-Name header".into()))?;
+        .ok_or((
+            StatusCode::UNAUTHORIZED,
+            "missing X-Runner-Name header".into(),
+        ))?;
 
     let token = headers
         .get("x-runner-token")
         .and_then(|v| v.to_str().ok())
-        .ok_or((StatusCode::UNAUTHORIZED, "missing X-Runner-Token header".into()))?;
+        .ok_or((
+            StatusCode::UNAUTHORIZED,
+            "missing X-Runner-Token header".into(),
+        ))?;
 
     let token_hash = crate::auth::hash_token(token);
     let runner = db::runner::authenticate(&state.db, name, &token_hash)
         .await
-        .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid runner credentials".into()))?;
+        .map_err(|_| {
+            (
+                StatusCode::UNAUTHORIZED,
+                "invalid runner credentials".into(),
+            )
+        })?;
 
     Ok(runner)
 }
@@ -65,7 +76,12 @@ async fn verify_runner_owns_job(
 ) -> Result<db::runner::QueuedJob, (StatusCode, String)> {
     let queued = db::runner::get_queued_job_by_job_run_id(pool, job_id)
         .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "job not found in runner queue".into()))?;
+        .map_err(|_| {
+            (
+                StatusCode::NOT_FOUND,
+                "job not found in runner queue".into(),
+            )
+        })?;
 
     if queued.claimed_by.as_deref() != Some(runner_id) {
         return Err((
@@ -162,8 +178,7 @@ async fn register_runner(
         {
             return Err((
                 StatusCode::BAD_REQUEST,
-                "labels must be 1-64 alphanumeric characters, hyphens, underscores, or dots"
-                    .into(),
+                "labels must be 1-64 alphanumeric characters, hyphens, underscores, or dots".into(),
             ));
         }
     }
@@ -218,15 +233,19 @@ async fn list_runners(
     let limit = query.limit.clamp(1, 500);
     let offset = query.offset.max(0);
 
-    let runners = db::runner::list(&state.db, limit, offset).await.map_err(|e| {
-        tracing::error!("failed to list runners: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal server error".into(),
-        )
-    })?;
+    let runners = db::runner::list(&state.db, limit, offset)
+        .await
+        .map_err(|e| {
+            tracing::error!("failed to list runners: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
 
-    Ok(Json(runners.into_iter().map(RunnerResponse::from).collect()))
+    Ok(Json(
+        runners.into_iter().map(RunnerResponse::from).collect(),
+    ))
 }
 
 // --- Remove runner (admin only) ---
@@ -323,19 +342,17 @@ async fn start_job(
     if queued.status != "claimed" {
         return Err((
             StatusCode::CONFLICT,
-            format!("job queue status is '{}', expected 'claimed'", queued.status),
+            format!(
+                "job queue status is '{}', expected 'claimed'",
+                queued.status
+            ),
         ));
     }
 
     // Mark the job_run as running
-    db::pipeline::update_job_status(
-        &state.db,
-        &job_id,
-        db::pipeline::RunStatus::Running,
-        None,
-    )
-    .await
-    .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    db::pipeline::update_job_status(&state.db, &job_id, db::pipeline::RunStatus::Running, None)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
 
     // Update the runner field on the job
     db::runner::set_job_runner(&state.db, &job_id, &runner.name)
@@ -381,13 +398,19 @@ async fn submit_step_log(
 
     // Validate input
     if req.step_name.len() > 256 {
-        return Err((StatusCode::BAD_REQUEST, "step_name too long (max 256)".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "step_name too long (max 256)".into(),
+        ));
     }
     if req.step_index < 0 || req.step_index > 1000 {
         return Err((StatusCode::BAD_REQUEST, "step_index must be 0-1000".into()));
     }
     if req.status != "passed" && req.status != "failed" {
-        return Err((StatusCode::BAD_REQUEST, "status must be 'passed' or 'failed'".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "status must be 'passed' or 'failed'".into(),
+        ));
     }
 
     // Verify this runner has claimed this job
@@ -456,10 +479,7 @@ async fn complete_job(
 
     // Validate step count and step name lengths
     if req.steps.len() > 100 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "too many steps (max 100)".into(),
-        ));
+        return Err((StatusCode::BAD_REQUEST, "too many steps (max 100)".into()));
     }
     for step in &req.steps {
         if step.name.len() > 256 {
@@ -601,13 +621,17 @@ async fn mask_secrets_for_job(state: &AppState, repo_id: &str, output: &str) -> 
             masked = result;
 
             // Also mask URL-encoded form
-            let url_encoded: String = value.bytes().map(|b| {
-                if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
-                    (b as char).to_string()
-                } else {
-                    format!("%{:02X}", b)
-                }
-            }).collect();
+            let url_encoded: String = value
+                .bytes()
+                .map(|b| {
+                    if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~'
+                    {
+                        (b as char).to_string()
+                    } else {
+                        format!("%{:02X}", b)
+                    }
+                })
+                .collect();
             if url_encoded != value {
                 // Case-insensitive replacement for URL-encoded form
                 let lower_masked2 = masked.to_lowercase();
@@ -691,4 +715,3 @@ async fn finalize_pipeline_if_done(
     }
     streams.remove(pipeline_id);
 }
-

@@ -3,7 +3,6 @@
 mod common;
 
 use delta_core::db;
-use delta_core::models::repo::Visibility;
 
 #[tokio::test]
 async fn test_create_and_get_user() {

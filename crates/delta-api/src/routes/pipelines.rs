@@ -410,8 +410,8 @@ async fn set_secret(
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Admin).await?;
     let encryption_key = delta_core::crypto::derive_key(&state.config.auth.secrets_key);
-    let encrypted = delta_core::crypto::encrypt(&encryption_key, req.value.as_bytes())
-        .map_err(|e| {
+    let encrypted =
+        delta_core::crypto::encrypt(&encryption_key, req.value.as_bytes()).map_err(|e| {
             tracing::error!("encryption failed: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,

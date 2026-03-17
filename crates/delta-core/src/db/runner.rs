@@ -115,14 +115,13 @@ pub async fn get_by_name(pool: &SqlitePool, name: &str) -> Result<Runner> {
 }
 
 pub async fn list(pool: &SqlitePool, limit: i64, offset: i64) -> Result<Vec<Runner>> {
-    let rows = sqlx::query_as::<_, RunnerRow>(
-        "SELECT * FROM runners ORDER BY name LIMIT ? OFFSET ?",
-    )
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| DeltaError::Pipeline(e.to_string()))?;
+    let rows =
+        sqlx::query_as::<_, RunnerRow>("SELECT * FROM runners ORDER BY name LIMIT ? OFFSET ?")
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| DeltaError::Pipeline(e.to_string()))?;
     Ok(rows.into_iter().map(|r| r.into_runner()).collect())
 }
 
@@ -152,15 +151,14 @@ pub async fn heartbeat(pool: &SqlitePool, runner_id: &str) -> Result<()> {
 
 /// Authenticate a runner by name and token hash. Returns the runner if valid.
 pub async fn authenticate(pool: &SqlitePool, name: &str, token_hash: &str) -> Result<Runner> {
-    let row = sqlx::query_as::<_, RunnerRow>(
-        "SELECT * FROM runners WHERE name = ? AND token_hash = ?",
-    )
-    .bind(name)
-    .bind(token_hash)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| DeltaError::Pipeline(e.to_string()))?
-    .ok_or_else(|| DeltaError::Pipeline("invalid runner credentials".into()))?;
+    let row =
+        sqlx::query_as::<_, RunnerRow>("SELECT * FROM runners WHERE name = ? AND token_hash = ?")
+            .bind(name)
+            .bind(token_hash)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| DeltaError::Pipeline(e.to_string()))?
+            .ok_or_else(|| DeltaError::Pipeline("invalid runner credentials".into()))?;
     Ok(row.into_runner())
 }
 
@@ -247,27 +245,27 @@ pub async fn poll_job(
 }
 
 pub async fn get_queued_job(pool: &SqlitePool, id: &str) -> Result<QueuedJob> {
-    let row = sqlx::query_as::<_, QueuedJobRow>(
-        "SELECT * FROM runner_job_queue WHERE id = ?",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| DeltaError::Pipeline(e.to_string()))?
-    .ok_or_else(|| DeltaError::Pipeline("queued job not found".into()))?;
+    let row = sqlx::query_as::<_, QueuedJobRow>("SELECT * FROM runner_job_queue WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| DeltaError::Pipeline(e.to_string()))?
+        .ok_or_else(|| DeltaError::Pipeline("queued job not found".into()))?;
     Ok(row.into_queued_job())
 }
 
 /// Look up a queued job by its job_run_id (for ownership verification).
-pub async fn get_queued_job_by_job_run_id(pool: &SqlitePool, job_run_id: &str) -> Result<QueuedJob> {
-    let row = sqlx::query_as::<_, QueuedJobRow>(
-        "SELECT * FROM runner_job_queue WHERE job_run_id = ?",
-    )
-    .bind(job_run_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| DeltaError::Pipeline(e.to_string()))?
-    .ok_or_else(|| DeltaError::Pipeline("queued job not found".into()))?;
+pub async fn get_queued_job_by_job_run_id(
+    pool: &SqlitePool,
+    job_run_id: &str,
+) -> Result<QueuedJob> {
+    let row =
+        sqlx::query_as::<_, QueuedJobRow>("SELECT * FROM runner_job_queue WHERE job_run_id = ?")
+            .bind(job_run_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| DeltaError::Pipeline(e.to_string()))?
+            .ok_or_else(|| DeltaError::Pipeline("queued job not found".into()))?;
     Ok(row.into_queued_job())
 }
 
@@ -294,7 +292,9 @@ pub async fn complete_queued_job(pool: &SqlitePool, queue_id: &str, runner_id: &
     .map_err(|e| DeltaError::Pipeline(e.to_string()))?;
 
     if result.rows_affected() == 0 {
-        return Err(DeltaError::Pipeline("cannot complete: job not claimed by this runner".into()));
+        return Err(DeltaError::Pipeline(
+            "cannot complete: job not claimed by this runner".into(),
+        ));
     }
     Ok(())
 }

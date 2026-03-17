@@ -40,10 +40,7 @@ pub fn router() -> Router<AppState> {
             "/{owner}/{name}/workspaces/{ws_id}/files/*path",
             get(read_file),
         )
-        .route(
-            "/{owner}/{name}/workspaces/{ws_id}/tree",
-            get(list_tree),
-        )
+        .route("/{owner}/{name}/workspaces/{ws_id}/tree", get(list_tree))
         .route(
             "/{owner}/{name}/workspaces/{ws_id}/pipelines",
             axum::routing::post(trigger_pipeline),
@@ -455,10 +452,7 @@ async fn trigger_pipeline(
         return Err((StatusCode::CONFLICT, "workspace is not active".into()));
     }
 
-    let commit_sha = ws
-        .head_commit
-        .as_deref()
-        .unwrap_or(&ws.base_commit);
+    let commit_sha = ws.head_commit.as_deref().unwrap_or(&ws.base_commit);
 
     let run = db::pipeline::create_pipeline(
         &state.db,
@@ -650,8 +644,7 @@ pub async fn cleanup_expired_workspaces(
             if let Ok(repo) = db::repo::get_by_id(&db, &ws.repo_id).await
                 && let Ok(repo_path) = repo_host.repo_path(&repo.owner, &repo.name)
             {
-                let _ =
-                    delta_vcs::workspace::delete_workspace_branch(&repo_path, &ws.branch).await;
+                let _ = delta_vcs::workspace::delete_workspace_branch(&repo_path, &ws.branch).await;
                 let _ = delta_vcs::workspace::prune_worktrees(&repo_path).await;
             }
 

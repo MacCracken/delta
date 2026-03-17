@@ -1,5 +1,7 @@
 //! Shared test helpers for delta-core integration tests.
 
+#![allow(dead_code)]
+
 use delta_core::db;
 use delta_core::models::repo::Visibility;
 

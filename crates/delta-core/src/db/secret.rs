@@ -108,12 +108,11 @@ pub async fn delete(pool: &SqlitePool, repo_id: &str, name: &str) -> Result<()> 
 pub async fn re_encrypt_legacy(pool: &SqlitePool, encryption_passphrase: &str) -> Result<u64> {
     let key = crate::crypto::derive_key(encryption_passphrase);
 
-    let rows = sqlx::query_as::<_, SecretValueWithIdRow>(
-        "SELECT id, encrypted_value FROM repo_secrets",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| DeltaError::Storage(e.to_string()))?;
+    let rows =
+        sqlx::query_as::<_, SecretValueWithIdRow>("SELECT id, encrypted_value FROM repo_secrets")
+            .fetch_all(pool)
+            .await
+            .map_err(|e| DeltaError::Storage(e.to_string()))?;
 
     let mut count = 0u64;
     for row in rows {
@@ -137,14 +136,13 @@ pub async fn re_encrypt_legacy(pool: &SqlitePool, encryption_passphrase: &str) -
             Err(_) => continue,
         };
         let now = Utc::now().to_rfc3339();
-        let _ = sqlx::query(
-            "UPDATE repo_secrets SET encrypted_value = ?, updated_at = ? WHERE id = ?",
-        )
-        .bind(&new_encrypted)
-        .bind(&now)
-        .bind(&row.id)
-        .execute(pool)
-        .await;
+        let _ =
+            sqlx::query("UPDATE repo_secrets SET encrypted_value = ?, updated_at = ? WHERE id = ?")
+                .bind(&new_encrypted)
+                .bind(&now)
+                .bind(&row.id)
+                .execute(pool)
+                .await;
         count += 1;
     }
 

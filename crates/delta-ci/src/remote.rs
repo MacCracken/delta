@@ -99,10 +99,7 @@ pub fn build_payload(
         .enumerate()
         .filter_map(|(i, step)| {
             step.run.as_ref().map(|cmd| StepPayload {
-                name: step
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| format!("step-{}", i)),
+                name: step.name.clone().unwrap_or_else(|| format!("step-{}", i)),
                 run: cmd.clone(),
             })
         })

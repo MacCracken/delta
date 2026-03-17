@@ -70,11 +70,10 @@ async fn register(
     }
 
     // Safety valve: cap total registrations
-    let user_count: i64 =
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users")
-            .fetch_one(&state.db)
-            .await
-            .unwrap_or(0);
+    let user_count: i64 = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users")
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(0);
     if user_count >= 1000 {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,

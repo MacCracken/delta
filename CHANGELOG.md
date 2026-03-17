@@ -6,6 +6,55 @@ Versioning follows [AGNOS CalVer](docs/development/versioning.md): `YYYY.M.D`.
 
 ## Unreleased
 
+## 2026.3.16
+
+### Added
+- **Self-hosted CI runners** — offload pipeline jobs to external machines
+  - Runner registration API (`POST /api/v1/runners/register`) with per-runner unique tokens
+  - Job polling (`POST /api/v1/runners/poll`) with label-based matching
+  - Job lifecycle: start, stream step logs, complete with full result reporting
+  - Runner heartbeat and automatic stale-job reclamation (10-min timeout, 5-min reaper)
+  - Admin management: list (paginated), remove runners
+  - `runs_on: "self-hosted"` or `runs_on: "self-hosted, label1, label2"` in workflow TOML
+  - Secrets stripped from remote payloads (only DELTA_*/MATRIX_* env vars sent)
+  - Full secret masking on runner-submitted logs (case-insensitive + URL-encoded)
+  - Pipeline auto-finalization when all local + remote jobs complete
+  - Database migration `015_runners.sql` — `runners` and `runner_job_queue` tables
+  - `ci.runner_token` config field for runner registration authentication
+- **Site admin system** — `is_admin` flag on users (first registered user auto-promoted)
+  - `POST /api/v1/auth/admin/{user_id}` — promote/demote users (admin-only)
+  - Database migration `014_admin_flag.sql`
+- Legacy secret auto-migration — re-encrypts MAC-less secrets to authenticated format at startup
+
+### Security
+- **Crypto: encrypt-then-MAC** — BLAKE3 keyed hash tag appended to all new ciphertexts; wrong-key and tampered data now return errors instead of garbage; legacy format backward-compatible with warning
+- **Container sandbox hardening** — `--network=none`, `--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--read-only`, `--pids-limit=256`, `--memory=512m`, `--user=nobody`, `/tmp` tmpfs with noexec; image name and work_dir validation; env var key sanitization
+- **MCP endpoint access control** — read-only tools restricted to public repos; `list_by_owner` replaced with `list_visible`; workspace tools verify creator ownership and repo collaborator access
+- **Web UI visibility enforcement** — all handlers (repo browser, pipelines, PRs, settings, user profile) now check `Visibility::Public`; private repos return 404
+- **Admin-gated endpoints** — backup (status, snapshot), federation (all management), audit export, runner list/delete now require `is_admin`
+- **SSRF hardening** — `is_private_url` expanded to full `127.0.0.0/8`, `[::]`, `::ffff:` IPv4-mapped IPv6; federation URLs re-checked at fetch time (not just creation); mirror owner/name validated
+- **Runner security** — IDOR protection via job ownership verification (`claimed_by` check); registration takeover guard (token_hash must match on re-register); per-runner unique tokens; queue_id cross-validation; step_name/step_index/status input validation; step count limits (max 100); log output truncation (1MB)
+- **Token handling** — full hash comparison (not prefix match) via constant-time eq; no length timing leak
+- **Pipeline finalization** — atomic SQL UPDATE prevents race between concurrent job completions
+- **Private fork metadata** — `list_forks` now filters out non-public forks
+- **CSV formula injection** — audit export escapes cells starting with `=`, `+`, `-`, `@`
+- **Account registration cap** — max 1000 users
+- **Password max length** — 1024 character cap (Argon2 DoS prevention)
+- **Body size limits** — LFS and OCI uploads capped at 100MB
+- **CORS hardening** — `allow_headers` restricted to Authorization/Content-Type/Accept when origins are configured
+- **Seccomp aarch64** — graceful warning + fallback instead of silent pass-through
+- **Local execution output cap** — stdout/stderr buffers limited to 2MB each
+- **RNG error propagation** — `encrypt()` returns `Result` instead of panicking
+- **OCI tag validation** — 1-128 chars, alphanumeric/hyphens/dots/underscores
+
+### Changed
+- Version bumped to 2026.3.16
+- `constant_time_eq` deduplicated to shared `delta_core::crypto` module
+- `parse_repo_name` deduplicated to shared `helpers::strip_git_suffix`
+- Workspace lock DashMap entries cleaned up on workspace expiry
+- Roadmap updated: self-hosted runners complete, engineering backlog cleared
+- Migration numbering: runners migration is now `015_runners.sql`
+
 ## 2026.3.13
 
 ### Added
@@ -204,7 +253,7 @@ Versioning follows [AGNOS CalVer](docs/development/versioning.md): `YYYY.M.D`.
 - Trigger system (push, PR, tag, schedule, manual)
 - Job DAG scheduling with dependency resolution
 - Pipeline runner with end-to-end orchestration
-- Secret management (encrypted at rest via BLAKE3 stream cipher, scoped per repo)
+- Secret management (encrypted at rest via BLAKE3 stream cipher with MAC, scoped per repo)
 - Push event to pipeline trigger integration (automatic on git push)
 - Step log capture and storage
 - CI step timeout enforcement

@@ -180,10 +180,10 @@ async fn run_pipelines(
             }
 
             // Check if this job targets a self-hosted runner
-            if let Some(labels) =
-                ctx.runners_enabled
-                    .then(|| remote::parse_self_hosted(expanded.job.runs_on.as_deref()))
-                    .flatten()
+            if let Some(labels) = ctx
+                .runners_enabled
+                .then(|| remote::parse_self_hosted(expanded.job.runs_on.as_deref()))
+                .flatten()
             {
                 // Enqueue for remote execution — runner will pick it up via poll.
                 // Strip secrets from the env — runners should not receive repo secrets.
@@ -211,7 +211,11 @@ async fn run_pipelines(
                 let payload_json = match serde_json::to_string(&payload) {
                     Ok(j) => j,
                     Err(e) => {
-                        tracing::error!(job = &expanded.display_name, "failed to serialize job payload: {}", e);
+                        tracing::error!(
+                            job = &expanded.display_name,
+                            "failed to serialize job payload: {}",
+                            e
+                        );
                         pipeline_passed = false;
                         break;
                     }
@@ -237,7 +241,11 @@ async fn run_pipelines(
                         );
                     }
                     Err(e) => {
-                        tracing::error!(job = &expanded.display_name, "failed to enqueue job: {}", e);
+                        tracing::error!(
+                            job = &expanded.display_name,
+                            "failed to enqueue job: {}",
+                            e
+                        );
                         if let Err(e) = db::pipeline::update_job_status(
                             ctx.pool,
                             &job_run.id,

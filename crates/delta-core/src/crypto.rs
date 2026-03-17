@@ -4,7 +4,7 @@
 //! with plaintext. An encrypt-then-MAC tag (BLAKE3 keyed hash of nonce||ciphertext)
 //! is appended to detect tampering.
 //!
-//! Wire format: hex(nonce[16] || ciphertext[N] || tag[32])
+//! Wire format: `hex(nonce[16] || ciphertext[N] || tag[32])`
 
 use crate::{DeltaError, Result};
 
@@ -12,8 +12,7 @@ use crate::{DeltaError, Result};
 /// Returns a hex-encoded string of `nonce || ciphertext || tag`.
 pub fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<String> {
     let mut nonce = [0u8; 16];
-    getrandom::fill(&mut nonce)
-        .map_err(|e| DeltaError::Storage(format!("RNG failure: {e}")))?;
+    getrandom::fill(&mut nonce).map_err(|e| DeltaError::Storage(format!("RNG failure: {e}")))?;
 
     let ciphertext = xor_stream(key, &nonce, plaintext);
 
@@ -39,7 +38,9 @@ pub fn decrypt(key: &[u8; 32], hex_input: &str) -> Result<String> {
         // Fall back to untagged decryption for backwards compatibility.
         // NOTE: Legacy secrets have no integrity protection. Re-encrypt to upgrade.
         if raw.len() >= 16 {
-            tracing::warn!("decrypting legacy secret without MAC — re-encrypt to upgrade integrity protection");
+            tracing::warn!(
+                "decrypting legacy secret without MAC — re-encrypt to upgrade integrity protection"
+            );
             return decrypt_legacy(key, &raw);
         }
         return Err(DeltaError::Storage("secret data too short".into()));
@@ -130,8 +131,7 @@ fn xor_stream(key: &[u8; 32], nonce: &[u8; 16], data: &[u8]) -> Vec<u8> {
 /// Generate a random 32-byte key and return it as hex.
 pub fn generate_repo_key() -> Result<String> {
     let mut key = [0u8; 32];
-    getrandom::fill(&mut key)
-        .map_err(|e| DeltaError::Storage(format!("RNG failure: {e}")))?;
+    getrandom::fill(&mut key).map_err(|e| DeltaError::Storage(format!("RNG failure: {e}")))?;
     Ok(hex::encode(key))
 }
 
@@ -178,10 +178,12 @@ mod tests {
         let result = decrypt(&key2, &encrypted);
         // With MAC, wrong key should produce an integrity error
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("integrity check failed"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("integrity check failed")
+        );
     }
 
     #[test]
