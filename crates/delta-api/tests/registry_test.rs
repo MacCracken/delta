@@ -254,3 +254,93 @@ async fn lfs_batch_returns_absolute_urls_and_uploads_are_idempotent() {
         assert_eq!(status, StatusCode::OK);
     }
 }
+
+#[tokio::test]
+async fn draft_releases_are_hidden_from_readers() {
+    let server = start_server().await;
+    let owner = create_user_and_repo(&server, "rae", "tool", "public").await;
+    let reader = register(&server, "sam").await;
+    for (tag, draft) in [("v1", false), ("v2", true)] {
+        let (status, body) = common::post(
+            &server,
+            &owner,
+            "/repos/rae/tool/releases",
+            serde_json::json!({ "tag_name": tag, "name": tag, "is_draft": draft }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+    }
+    let client = reqwest::Client::new();
+    let list = |token: String| {
+        let client = client.clone();
+        let url = format!("{}/api/v1/repos/rae/tool/releases", server.base);
+        async move {
+            let releases: Vec<serde_json::Value> = client
+                .get(url)
+                .bearer_auth(token)
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            releases.len()
+        }
+    };
+    assert_eq!(list(owner.clone()).await, 2);
+    assert_eq!(list(reader.clone()).await, 1);
+    let draft_url = format!("{}/api/v1/repos/rae/tool/releases/v2", server.base);
+    let status = |token: String| {
+        let request = client.get(&draft_url).bearer_auth(token);
+        async move { request.send().await.unwrap().status() }
+    };
+    assert_eq!(status(reader).await, StatusCode::NOT_FOUND);
+    assert_eq!(status(owner).await, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn head_requests_are_not_downloads() {
+    let server = start_server().await;
+    let token = create_user_and_repo(&server, "hal", "pkgs", "public").await;
+    let client = reqwest::Client::new();
+    let meta = serde_json::json!({ "name": "probe", "version": "1.0.0", "arch": "x86_64" });
+    let status = client
+        .put(format!("{}/api/v1/registry/ark/probe/1.0.0", server.base))
+        .bearer_auth(&token)
+        .header("x-ark-meta", meta.to_string())
+        .body(b"bytes".to_vec())
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::CREATED);
+
+    let url = format!(
+        "{}/api/v1/registry/ark/probe/1.0.0?arch=x86_64",
+        server.base
+    );
+    let downloads = || async {
+        let pkg = delta_core::db::ark_package::get_version(
+            &server.state.db,
+            "probe",
+            "1.0.0",
+            Some("x86_64"),
+        )
+        .await
+        .unwrap();
+        delta_core::db::artifact::get(&server.state.db, &pkg.artifact_id)
+            .await
+            .unwrap()
+            .download_count
+    };
+    assert_eq!(
+        client.head(&url).send().await.unwrap().status(),
+        StatusCode::OK
+    );
+    assert_eq!(downloads().await, 0);
+    assert_eq!(
+        client.get(&url).send().await.unwrap().status(),
+        StatusCode::OK
+    );
+    assert_eq!(downloads().await, 1);
+}

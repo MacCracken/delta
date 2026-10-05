@@ -71,6 +71,10 @@ async fn list_audit_log(
 #[derive(Deserialize)]
 struct ExportQuery {
     resource_type: Option<String>,
+    /// Only entries at or after this time (RFC 3339 or `YYYY-MM-DD`).
+    since: Option<String>,
+    /// Only entries at or before this time (RFC 3339 or `YYYY-MM-DD`).
+    until: Option<String>,
     #[serde(default = "default_export_limit")]
     limit: i64,
     #[serde(default)]
@@ -95,13 +99,20 @@ async fn export_audit_logs(
 ) -> Result<axum::response::Response, (StatusCode, String)> {
     // Scope export to the requesting user's own audit logs only
     let own_id = user.id.to_string();
-    let limit = params.limit.min(100000);
+    // (A negative LIMIT means "no limit" to SQLite.)
+    let limit = params.limit.clamp(1, 100_000);
     let offset = params.offset.max(0);
+    let since = params.since.as_deref().map(parse_time).transpose()?;
+    let until = params.until.as_deref().map(parse_time).transpose()?;
 
-    let entries = db::audit::list(
+    let entries = db::audit::list_for_export(
         &state.db,
-        Some(&own_id),
-        params.resource_type.as_deref(),
+        &db::audit::ExportFilter {
+            user_id: Some(&own_id),
+            since: since.as_deref(),
+            until: until.as_deref(),
+            resource_type: params.resource_type.as_deref(),
+        },
         limit,
         offset,
     )
@@ -162,6 +173,24 @@ async fn export_audit_logs(
 
         Ok(Json(export).into_response())
     }
+}
+
+/// Normalize an RFC 3339 time or a `YYYY-MM-DD` date (midnight UTC) to
+/// RFC 3339 in UTC.
+fn parse_time(value: &str) -> Result<String, (StatusCode, String)> {
+    if let Ok(time) = chrono::DateTime::parse_from_rfc3339(value) {
+        return Ok(time.with_timezone(&chrono::Utc).to_rfc3339());
+    }
+    chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .ok()
+        .and_then(|date| date.and_hms_opt(0, 0, 0))
+        .map(|time| time.and_utc().to_rfc3339())
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("invalid time '{value}': use RFC 3339 or YYYY-MM-DD"),
+            )
+        })
 }
 
 fn csv_escape(s: &str) -> String {

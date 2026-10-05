@@ -152,6 +152,7 @@ async fn download_artifact(
     State(state): State<AppState>,
     Path((owner, name, artifact_id)): Path<(String, String, String)>,
     AuthUser(user): AuthUser,
+    method: axum::http::Method,
     headers: HeaderMap,
 ) -> Result<(StatusCode, Vec<u8>), (StatusCode, String)> {
     let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
@@ -166,6 +167,11 @@ async fn download_artifact(
         .blob_store
         .read(&artifact.content_hash)
         .map_err(|e| (StatusCode::NOT_FOUND, format!("blob not found: {}", e)))?;
+
+    // HEAD (served by this GET route) only probes: not a download.
+    if method == axum::http::Method::HEAD {
+        return Ok((StatusCode::OK, data));
+    }
 
     // Record download event with user-agent tracking
     let user_agent = headers
@@ -568,8 +574,8 @@ async fn list_releases(
     Path((owner, name)): Path<(String, String)>,
     AuthUser(user): AuthUser,
 ) -> Result<Json<Vec<db::release::Release>>, (StatusCode, String)> {
-    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
-    let releases = db::release::list_for_repo(&state.db, &repo.id.to_string())
+    let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
+    let mut releases = db::release::list_for_repo(&state.db, &repo.id.to_string())
         .await
         .map_err(|e| {
             tracing::error!("failed to list releases: {}", e);
@@ -578,6 +584,13 @@ async fn list_releases(
                 "internal server error".into(),
             )
         })?;
+    // Drafts are visible only to those who can edit releases.
+    if require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write)
+        .await
+        .is_err()
+    {
+        releases.retain(|r| !r.is_draft);
+    }
     Ok(Json(releases))
 }
 
@@ -644,10 +657,18 @@ async fn get_release(
     Path((owner, name, tag)): Path<(String, String, String)>,
     AuthUser(user): AuthUser,
 ) -> Result<Json<db::release::Release>, (StatusCode, String)> {
-    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
+    let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let release = db::release::get_by_tag(&state.db, &repo.id.to_string(), &tag)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    // Drafts are visible only to those who can edit releases.
+    if release.is_draft
+        && require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write)
+            .await
+            .is_err()
+    {
+        return Err((StatusCode::NOT_FOUND, "release not found".into()));
+    }
     Ok(Json(release))
 }
 

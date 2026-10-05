@@ -17,6 +17,7 @@ use axum::{
 use delta_core::db;
 use serde::{Deserialize, Serialize};
 
+use crate::routes::git::{GitAccess, authorize_git_access};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -29,6 +30,10 @@ pub fn router() -> Router<AppState> {
         )
         .layer(axum::extract::DefaultBodyLimit::max(
             crate::helpers::MAX_UPLOAD_BYTES,
+        ))
+        // git-lfs asks the credential helper only after a challenged 401.
+        .layer(axum::middleware::map_response(
+            crate::routes::git::add_basic_auth_challenge,
         ))
 }
 
@@ -140,7 +145,7 @@ async fn batch(
     }
 
     // Resolve repo — uploads require write access, downloads require read
-    let (repo_record, _is_owner) = if req.operation == "upload" {
+    let repo_record = if req.operation == "upload" {
         resolve_repo_and_auth_write(&state, &headers, &owner, name).await?
     } else {
         resolve_repo_and_auth(&state, &headers, &owner, name).await?
@@ -299,7 +304,7 @@ async fn download(
 ) -> Result<Response, (StatusCode, String)> {
     let name = parse_repo_name(&repo);
 
-    let (repo_record, _) = resolve_repo_and_auth(&state, &headers, &owner, name).await?;
+    let repo_record = resolve_repo_and_auth(&state, &headers, &owner, name).await?;
     let repo_id = repo_record.id.to_string();
 
     if !delta_registry::lfs_store::validate_oid(&oid) {
@@ -346,7 +351,7 @@ async fn upload(
 
     let name = parse_repo_name(&repo);
 
-    let (repo_record, _) = resolve_repo_and_auth_write(&state, &headers, &owner, name).await?;
+    let repo_record = resolve_repo_and_auth_write(&state, &headers, &owner, name).await?;
     let repo_id = repo_record.id.to_string();
 
     if !delta_registry::lfs_store::validate_oid(&oid) {
@@ -385,7 +390,7 @@ async fn verify(
 ) -> Result<Response, (StatusCode, String)> {
     let name = parse_repo_name(&repo);
 
-    let (repo_record, _) = resolve_repo_and_auth(&state, &headers, &owner, name).await?;
+    let repo_record = resolve_repo_and_auth(&state, &headers, &owner, name).await?;
     let repo_id = repo_record.id.to_string();
 
     if !delta_registry::lfs_store::validate_oid(&req.oid) {
@@ -414,44 +419,14 @@ async fn verify(
 }
 
 /// Resolve the repo from owner/name and authenticate for read access.
-/// Returns (repo, is_owner).
 async fn resolve_repo_and_auth(
     state: &AppState,
     headers: &HeaderMap,
     owner: &str,
     name: &str,
-) -> Result<(delta_core::models::repo::Repository, bool), (StatusCode, String)> {
-    let owner_user = db::user::get_by_username(&state.db, owner)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "repository not found".into()))?;
-
-    let owner_id = owner_user.id.to_string();
-    let repo = db::repo::get_by_owner_and_name(&state.db, &owner_id, name)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "repository not found".into()))?;
-
-    // Public repos allow anonymous reads
-    if repo.visibility == delta_core::models::repo::Visibility::Public {
-        return Ok((repo, false));
-    }
-
-    // Private repo — need auth
-    let user = authenticate_lfs_user(state, headers)
-        .await
-        .map_err(|e| (StatusCode::UNAUTHORIZED, e))?;
-
-    let is_owner = user.username == owner;
-    if !is_owner {
-        let role =
-            db::collaborator::get_role(&state.db, &repo.id.to_string(), &user.id.to_string())
-                .await
-                .unwrap_or(None);
-        if role.is_none() {
-            return Err((StatusCode::NOT_FOUND, "repository not found".into()));
-        }
-    }
-
-    Ok((repo, is_owner))
+) -> Result<delta_core::models::repo::Repository, (StatusCode, String)> {
+    let (_, repo) = authorize_git_access(state, headers, owner, name, GitAccess::Read).await?;
+    Ok(repo)
 }
 
 /// Resolve repo and authenticate for write access.
@@ -460,88 +435,9 @@ async fn resolve_repo_and_auth_write(
     headers: &HeaderMap,
     owner: &str,
     name: &str,
-) -> Result<(delta_core::models::repo::Repository, bool), (StatusCode, String)> {
-    let owner_user = db::user::get_by_username(&state.db, owner)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "repository not found".into()))?;
-
-    let owner_id = owner_user.id.to_string();
-    let repo = db::repo::get_by_owner_and_name(&state.db, &owner_id, name)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "repository not found".into()))?;
-
-    let user = authenticate_lfs_user(state, headers)
-        .await
-        .map_err(|e| (StatusCode::UNAUTHORIZED, e))?;
-
-    let is_owner = user.username == owner;
-    if !is_owner {
-        let role =
-            db::collaborator::get_role(&state.db, &repo.id.to_string(), &user.id.to_string())
-                .await
-                .unwrap_or(None);
-        match role {
-            Some(r) if r.has(delta_core::models::collaborator::CollaboratorRole::Write) => {
-                // allowed
-            }
-            _ => {
-                return Err((
-                    StatusCode::FORBIDDEN,
-                    "no write access to this repository".into(),
-                ));
-            }
-        }
-    }
-
-    Ok((repo, is_owner))
-}
-
-/// Authenticate an LFS request. LFS uses Basic auth (same as git HTTP).
-fn authenticate_lfs_user(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> impl std::future::Future<Output = std::result::Result<delta_core::models::user::User, String>> + Send
-{
-    let auth_header = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-
-    let db = state.db.clone();
-
-    async move {
-        let auth = auth_header.ok_or("authentication required")?;
-
-        // Support both Basic and Bearer auth
-        if let Some(token) = auth.strip_prefix("Bearer ") {
-            return crate::auth::authenticate_token(&db, token)
-                .await
-                .map_err(|_| "invalid or expired token".to_string());
-        }
-
-        let credentials = auth.strip_prefix("Basic ").ok_or("invalid auth format")?;
-
-        let decoded =
-            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, credentials)
-                .map_err(|_| "invalid base64 credentials".to_string())?;
-
-        let decoded_str =
-            String::from_utf8(decoded).map_err(|_| "invalid utf-8 credentials".to_string())?;
-
-        let (username, token) = decoded_str
-            .split_once(':')
-            .ok_or("invalid credential format")?;
-
-        let user = crate::auth::authenticate_token(&db, token)
-            .await
-            .map_err(|_| "invalid or expired token".to_string())?;
-
-        if user.username != username {
-            return Err("username mismatch".to_string());
-        }
-
-        Ok(user)
-    }
+) -> Result<delta_core::models::repo::Repository, (StatusCode, String)> {
+    let (_, repo) = authorize_git_access(state, headers, owner, name, GitAccess::Write).await?;
+    Ok(repo)
 }
 
 #[cfg(test)]

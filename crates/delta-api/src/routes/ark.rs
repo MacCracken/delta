@@ -115,6 +115,7 @@ async fn download_package(
     Path((name, version)): Path<(String, String)>,
     Query(query): Query<ArchQuery>,
     MaybeAuthUser(user): MaybeAuthUser,
+    method: axum::http::Method,
 ) -> Result<(StatusCode, Vec<u8>), (StatusCode, String)> {
     let pkg = db::ark_package::get_version(&state.db, &name, &version, query.arch.as_deref())
         .await
@@ -132,7 +133,10 @@ async fn download_package(
         .read(&artifact.content_hash)
         .map_err(|e| (StatusCode::NOT_FOUND, format!("blob not found: {}", e)))?;
 
-    let _ = db::artifact::increment_download(&state.db, &artifact.id).await;
+    // HEAD (served by this GET route) only probes: not a download.
+    if method != axum::http::Method::HEAD {
+        let _ = db::artifact::increment_download(&state.db, &artifact.id).await;
+    }
 
     Ok((StatusCode::OK, data))
 }

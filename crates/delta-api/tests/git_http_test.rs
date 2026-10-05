@@ -3,6 +3,7 @@
 mod common;
 
 use common::{create_user_and_repo, git, git_ok, post, register, start_server};
+use reqwest::StatusCode;
 
 #[tokio::test]
 async fn push_and_clone_over_http() {
@@ -190,4 +191,80 @@ async fn merge_gate_checks_the_current_head() {
     assert!(status.is_success());
     let (status, body) = post(&server, &owner, &merge, serde_json::json!({})).await;
     assert!(status.is_success(), "merge: {status} {body}");
+}
+
+#[tokio::test]
+async fn private_repositories_look_like_missing_ones() {
+    let server = start_server().await;
+    let owner = create_user_and_repo(&server, "pia", "hidden", "private").await;
+    let outsider = register(&server, "oscar").await;
+    let reader = register(&server, "rita").await;
+    let (status, _) = post(
+        &server,
+        &owner,
+        "/repos/pia/hidden/collaborators",
+        serde_json::json!({ "username": "rita", "role": "read" }),
+    )
+    .await;
+    assert!(status.is_success());
+
+    let client = reqwest::Client::new();
+    let basic = |user: &str, token: &str| {
+        use base64::Engine;
+        let creds = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{token}"));
+        format!("Basic {creds}")
+    };
+    let get = |path: &str, auth: Option<String>| {
+        let mut request = client.get(format!("{}{path}", server.base));
+        if let Some(auth) = auth {
+            request = request.header("authorization", auth);
+        }
+        async move { request.send().await.unwrap().status() }
+    };
+    let lfs_upload = |repo: &str, auth: Option<String>| {
+        let mut request = client
+            .post(format!(
+                "{}/pia/{repo}.git/info/lfs/objects/batch",
+                server.base
+            ))
+            .header("content-type", "application/vnd.git-lfs+json")
+            .json(&serde_json::json!({
+                "operation": "upload",
+                "objects": [{ "oid": "a".repeat(64), "size": 1 }],
+            }));
+        if let Some(auth) = auth {
+            request = request.header("authorization", auth);
+        }
+        async move { request.send().await.unwrap() }
+    };
+
+    for repo in ["hidden", "missing"] {
+        // Anonymous clients are asked to authenticate either way...
+        let refs = format!("/pia/{repo}.git/info/refs?service=git-upload-pack");
+        assert_eq!(get(&refs, None).await, StatusCode::UNAUTHORIZED, "{repo}");
+        let res = lfs_upload(repo, None).await;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "{repo}");
+        assert!(res.headers().contains_key("www-authenticate"));
+        // ...and users without access see nothing.
+        let push_refs = format!("/pia/{repo}.git/info/refs?service=git-receive-pack");
+        let auth = Some(basic("oscar", &outsider));
+        assert_eq!(
+            get(&refs, auth.clone()).await,
+            StatusCode::NOT_FOUND,
+            "{repo}"
+        );
+        assert_eq!(get(&push_refs, auth.clone()).await, StatusCode::NOT_FOUND);
+        assert_eq!(lfs_upload(repo, auth).await.status(), StatusCode::NOT_FOUND);
+    }
+
+    // A reader may fetch but not push.
+    let auth = Some(basic("rita", &reader));
+    let refs = "/pia/hidden.git/info/refs?service=git-upload-pack";
+    assert_eq!(get(refs, auth.clone()).await, StatusCode::OK);
+    let push_refs = "/pia/hidden.git/info/refs?service=git-receive-pack";
+    assert_eq!(get(push_refs, auth.clone()).await, StatusCode::FORBIDDEN);
+    assert_eq!(
+        lfs_upload("hidden", auth).await.status(),
+        StatusCode::FORBIDDEN
+    );
 }

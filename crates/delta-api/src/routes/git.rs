@@ -62,7 +62,7 @@ pub fn router() -> Router<AppState> {
 
 /// git (via libcurl) only sends credentials after a 401 that names an
 /// authentication scheme, so every 401 from these routes carries one.
-async fn add_basic_auth_challenge(mut response: Response) -> Response {
+pub(crate) async fn add_basic_auth_challenge(mut response: Response) -> Response {
     if response.status() == StatusCode::UNAUTHORIZED {
         response.headers_mut().insert(
             header::WWW_AUTHENTICATE,
@@ -109,8 +109,8 @@ async fn info_refs(
     headers: HeaderMap,
 ) -> Result<Response, HttpError> {
     let name = parse_repo_name(&repo);
-    let repo_path = repo_dir(&state, &owner, name)?;
 
+    // Access first: whether a repository exists is not public.
     match query.service.as_str() {
         "git-receive-pack" => {
             authorize_push(&state, &headers, &owner, name).await?;
@@ -118,6 +118,7 @@ async fn info_refs(
         "git-upload-pack" => check_read_access(&state, &owner, name, &headers).await?,
         _ => return Err((StatusCode::BAD_REQUEST, "unsupported git service".into())),
     }
+    let repo_path = repo_dir(&state, &owner, name)?;
 
     let body = protocol::advertise_refs(&repo_path, &query.service)
         .await
@@ -180,8 +181,8 @@ async fn upload_pack(
     body: Body,
 ) -> Result<Response, HttpError> {
     let name = parse_repo_name(&repo);
-    let repo_path = repo_dir(&state, &owner, name)?;
     check_read_access(&state, &owner, name, &headers).await?;
+    let repo_path = repo_dir(&state, &owner, name)?;
 
     let mut child =
         protocol::spawn_service_rpc(&repo_path, "upload-pack", &[]).map_err(internal_error)?;
@@ -213,10 +214,10 @@ async fn receive_pack(
     body: Body,
 ) -> Result<Response, HttpError> {
     let name = parse_repo_name(&repo);
-    let repo_path = repo_dir(&state, &owner, name)?;
 
     // Push always requires auth with write access.
     let (user, repo_record) = authorize_push(&state, &headers, &owner, name).await?;
+    let repo_path = repo_dir(&state, &owner, name)?;
 
     let mut output = Vec::new();
     serve_push(
@@ -404,21 +405,40 @@ pub(crate) async fn find_repo(
         .map_err(|_| not_found())
 }
 
-/// Authenticate the request and require push access to the repository:
-/// 401 without valid credentials, 403 if the user may not push.
-async fn authorize_push(
+/// Access a git or LFS client asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GitAccess {
+    Read,
+    Write,
+}
+
+/// Resolve `owner/name` for a git or LFS client and check it may have
+/// `access`. Public repositories can be read without credentials; anything
+/// else authenticates first, so a repository the client can't read looks
+/// exactly like a missing one: anonymous clients are asked to authenticate
+/// (401) and authenticated users get 404. Readers who may not push get 403.
+pub(crate) async fn authorize_git_access(
     state: &AppState,
     headers: &HeaderMap,
     owner: &str,
     name: &str,
-) -> Result<(User, Repository), HttpError> {
+    access: GitAccess,
+) -> Result<(Option<User>, Repository), HttpError> {
+    let repo = match find_repo(state, owner, name).await {
+        Ok(repo) if access == GitAccess::Read && repo.visibility == Visibility::Public => {
+            return Ok((None, repo));
+        }
+        found => found.ok(),
+    };
+
     let user = authenticate_git_user(state, headers)
         .await
         .map_err(|e| (StatusCode::UNAUTHORIZED, e))?;
-    let repo = find_repo(state, owner, name).await?;
-
-    // Owner always has push access
-    if repo.owner != user.id.to_string() {
+    let not_found = || (StatusCode::NOT_FOUND, "repository not found".to_string());
+    let repo = repo.ok_or_else(not_found)?;
+    let (can_read, can_write) = if repo.owner == user.id.to_string() {
+        (true, true)
+    } else {
         let role = delta_core::db::collaborator::get_role(
             &state.db,
             &repo.id.to_string(),
@@ -426,51 +446,50 @@ async fn authorize_push(
         )
         .await
         .unwrap_or(None);
-        if !role.is_some_and(|r| r.has(delta_core::models::collaborator::CollaboratorRole::Write)) {
-            return Err((
-                StatusCode::FORBIDDEN,
-                "you don't have push access to this repository".into(),
-            ));
-        }
+        (
+            repo.visibility == Visibility::Public || role.is_some(),
+            role.is_some_and(|r| r.has(delta_core::models::collaborator::CollaboratorRole::Write)),
+        )
+    };
+    match access {
+        GitAccess::Read if can_read => Ok((Some(user), repo)),
+        GitAccess::Write if can_write => Ok((Some(user), repo)),
+        GitAccess::Write if can_read => Err((
+            StatusCode::FORBIDDEN,
+            "you don't have push access to this repository".into(),
+        )),
+        _ => Err(not_found()),
     }
+}
+
+/// Authenticate the request and require push access to the repository.
+async fn authorize_push(
+    state: &AppState,
+    headers: &HeaderMap,
+    owner: &str,
+    name: &str,
+) -> Result<(User, Repository), HttpError> {
+    let (user, repo) = authorize_git_access(state, headers, owner, name, GitAccess::Write).await?;
+    let user = user.ok_or_else(|| internal_error("push authorized without a user"))?;
     Ok((user, repo))
 }
 
-/// Check read access — public repos are open, private repos need owner or collaborator auth.
+/// Check read access — public repos are open, private repos need owner or
+/// collaborator auth.
 async fn check_read_access(
     state: &AppState,
     owner: &str,
     name: &str,
     headers: &HeaderMap,
 ) -> Result<(), HttpError> {
-    let repo = find_repo(state, owner, name).await?;
-    if repo.visibility == Visibility::Public {
-        return Ok(());
-    }
-
-    // Private repo — authenticate and check access
-    let user = authenticate_git_user(state, headers)
+    authorize_git_access(state, headers, owner, name, GitAccess::Read)
         .await
-        .map_err(|e| (StatusCode::UNAUTHORIZED, e))?;
-    if repo.owner == user.id.to_string() {
-        return Ok(());
-    }
-    let role = delta_core::db::collaborator::get_role(
-        &state.db,
-        &repo.id.to_string(),
-        &user.id.to_string(),
-    )
-    .await
-    .unwrap_or(None);
-    if role.is_some() {
-        Ok(())
-    } else {
-        Err((StatusCode::NOT_FOUND, "repository not found".into()))
-    }
+        .map(drop)
 }
 
-/// Authenticate a git HTTP request (Basic auth with an API token as the
-/// password) and return the User. Does NOT check repository permissions.
+/// Authenticate a git or LFS request and return the User: Basic auth with
+/// an API token as the password (and the token owner's name as the user
+/// name), or a Bearer token. Does NOT check repository permissions.
 async fn authenticate_git_user(
     state: &AppState,
     headers: &HeaderMap,
@@ -479,6 +498,12 @@ async fn authenticate_git_user(
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .ok_or("authentication required")?;
+
+    if let Some(token) = auth_header.strip_prefix("Bearer ") {
+        return crate::auth::authenticate_token(&state.db, token)
+            .await
+            .map_err(|_| "invalid or expired token".to_string());
+    }
 
     let credentials = auth_header
         .strip_prefix("Basic ")
