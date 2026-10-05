@@ -57,11 +57,21 @@ pub async fn execute_merge(
     // Add worktree at the base branch
     run_git(repo_path, &["worktree", "add", worktree_str, base_branch]).await?;
 
-    // Set author info
-    run_git_in(&worktree_path, &["config", "user.name", author_name]).await?;
-    run_git_in(&worktree_path, &["config", "user.email", author_email]).await?;
-
-    let merge_result = do_merge(&worktree_path, head_branch, strategy, merge_message).await;
+    // The identity is passed per command: `git config` in a linked worktree
+    // would write the shared repository config, racing with other merges.
+    let identity = Identity {
+        name: author_name,
+        email: author_email,
+    };
+    let merge_result = do_merge(
+        &worktree_path,
+        base_branch,
+        head_branch,
+        strategy,
+        merge_message,
+        &identity,
+    )
+    .await;
 
     if let Err(e) = merge_result {
         let _ = run_git(repo_path, &["worktree", "remove", "--force", worktree_str]).await;
@@ -77,22 +87,66 @@ pub async fn execute_merge(
     Ok(sha.trim().to_string())
 }
 
+/// Identity recorded on commits created by a merge.
+struct Identity<'a> {
+    name: &'a str,
+    email: &'a str,
+}
+
+impl Identity<'_> {
+    /// Environment making this identity the committer, and the author too
+    /// when `author` is set (rebases keep the original authors).
+    fn env(&self, author: bool) -> Vec<(&'static str, &str)> {
+        let mut env = vec![
+            ("GIT_COMMITTER_NAME", self.name),
+            ("GIT_COMMITTER_EMAIL", self.email),
+        ];
+        if author {
+            env.push(("GIT_AUTHOR_NAME", self.name));
+            env.push(("GIT_AUTHOR_EMAIL", self.email));
+        }
+        env
+    }
+}
+
 async fn do_merge(
     worktree: &Path,
+    base_branch: &str,
     head_branch: &str,
     strategy: MergeMode,
     message: &str,
+    identity: &Identity<'_>,
 ) -> Result<()> {
+    let ours = identity.env(true);
     match strategy {
         MergeMode::Merge => {
-            // Try direct branch ref first
-            run_git_in(worktree, &["merge", "--no-ff", "-m", message, head_branch]).await
+            run_git_env(
+                worktree,
+                &["merge", "--no-ff", "-m", message, head_branch],
+                &ours,
+            )
+            .await
         }
         MergeMode::Squash => {
-            run_git_in(worktree, &["merge", "--squash", head_branch]).await?;
-            run_git_in(worktree, &["commit", "-m", message]).await
+            run_git_env(worktree, &["merge", "--squash", head_branch], &ours).await?;
+            run_git_env(worktree, &["commit", "-m", message], &ours).await
         }
-        MergeMode::Rebase => run_git_in(worktree, &["rebase", head_branch]).await,
+        MergeMode::Rebase => {
+            // Replay the head branch's commits onto the base branch, then
+            // fast-forward the base to the result. (Rebasing the checked-out
+            // base onto the head would rewrite the base's own history.)
+            let committer = identity.env(false);
+            run_git_env(worktree, &["checkout", "--detach", head_branch], &committer).await?;
+            run_git_env(worktree, &["rebase", base_branch], &committer).await?;
+            let rebased = run_git_output(worktree, &["rev-parse", "HEAD"]).await?;
+            run_git_env(worktree, &["checkout", base_branch], &committer).await?;
+            run_git_env(
+                worktree,
+                &["merge", "--ff-only", rebased.trim()],
+                &committer,
+            )
+            .await
+        }
     }
 }
 
@@ -122,9 +176,10 @@ async fn run_git(repo_path: &Path, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-async fn run_git_in(worktree: &Path, args: &[&str]) -> Result<()> {
+async fn run_git_env(worktree: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<()> {
     let output = Command::new("git")
         .args(args)
+        .envs(env.iter().copied())
         .current_dir(worktree)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
