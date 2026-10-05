@@ -159,6 +159,22 @@ fn default_ssh_port() -> u16 {
     2222
 }
 
+/// Sample `secrets_key` values shipped in defaults and example configs.
+const PLACEHOLDER_SECRETS_KEYS: &[&str] = &[
+    "delta-change-me-in-production",
+    "change-me-to-a-strong-random-passphrase",
+    "change-this-to-a-random-string",
+    "dev-only-not-for-production",
+];
+
+impl AuthConfig {
+    /// Whether `secrets_key` is one of the publicly known sample values,
+    /// which protect nothing.
+    pub fn secrets_key_is_placeholder(&self) -> bool {
+        PLACEHOLDER_SECRETS_KEYS.contains(&self.secrets_key.as_str())
+    }
+}
+
 fn default_secrets_key() -> String {
     "delta-change-me-in-production".into()
 }
@@ -354,6 +370,31 @@ impl Default for DeltaConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_sample_secrets_keys_are_detected() {
+        for sample in [
+            include_str!("../../../config/delta.example.toml"),
+            include_str!("../../../config/delta.dev.toml"),
+            include_str!("../../../config/delta.private.toml"),
+            include_str!("../../../config/delta.docker.toml"),
+        ] {
+            let config: DeltaConfig = toml::from_str(sample).unwrap();
+            assert!(config.auth.secrets_key_is_placeholder());
+        }
+        assert!(DeltaConfig::default().auth.secrets_key_is_placeholder());
+        let mut config = DeltaConfig::default();
+        config.auth.secrets_key = "a-real-random-key-0f3c9e".into();
+        assert!(!config.auth.secrets_key_is_placeholder());
+    }
+
+    #[test]
+    fn test_federation_timeout_defaults_without_table() {
+        let config: DeltaConfig =
+            toml::from_str(include_str!("../../../config/delta.example.toml")).unwrap();
+        assert_eq!(config.federation.timeout_secs, 30);
+        assert_eq!(DeltaConfig::default().federation.timeout_secs, 30);
+    }
 
     #[test]
     fn test_default_config() {

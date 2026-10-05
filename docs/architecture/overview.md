@@ -70,7 +70,7 @@ Browser-based frontend for repository browsing, code review, CI dashboards, and 
 |-----------|--------|
 | Language | Rust (edition 2024) |
 | HTTP | axum |
-| Database | SQLite (dev) / Postgres (prod) via sqlx |
+| Database | SQLite via sqlx |
 | Git | gix (gitoxide) |
 | Content hash | BLAKE3 |
 | Serialization | serde, serde_json, toml |

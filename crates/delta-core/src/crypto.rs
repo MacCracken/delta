@@ -67,6 +67,28 @@ pub fn decrypt(key: &[u8; 32], hex_input: &str) -> Result<String> {
         .map_err(|e| DeltaError::Storage(format!("decrypted secret is not valid UTF-8: {e}")))
 }
 
+/// Decrypt a hex value as the legacy, unauthenticated format
+/// (`nonce || ciphertext`, no MAC). Only for migrating old secrets: it
+/// "succeeds" on any input, so callers must establish that the value is not
+/// in the authenticated format first.
+pub fn decrypt_legacy_unauthenticated(key: &[u8; 32], hex_input: &str) -> Result<String> {
+    let raw = hex::decode(hex_input)
+        .map_err(|e| DeltaError::Storage(format!("invalid secret encoding: {e}")))?;
+    if raw.len() < 16 {
+        return Err(DeltaError::Storage("secret data too short".into()));
+    }
+    decrypt_legacy(key, &raw)
+}
+
+/// Encrypt in the legacy format (test helper for migration tests).
+#[cfg(test)]
+pub(crate) fn encrypt_legacy(key: &[u8; 32], plaintext: &[u8]) -> String {
+    let nonce = [7u8; 16];
+    let mut out = nonce.to_vec();
+    out.extend(xor_stream(key, &nonce, plaintext));
+    hex::encode(out)
+}
+
 /// Decrypt legacy format (no MAC tag) for backwards compatibility.
 fn decrypt_legacy(key: &[u8; 32], raw: &[u8]) -> Result<String> {
     let (nonce_bytes, ciphertext) = raw.split_at(16);

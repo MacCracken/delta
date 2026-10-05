@@ -57,6 +57,14 @@ pub async fn init_pool(db_url: &str) -> Result<SqlitePool> {
 
 /// Initialize the database connection pool with a configurable pool size and run migrations.
 pub async fn init_pool_sized(db_url: &str, max_connections: u32) -> Result<SqlitePool> {
+    // Only SQLite is supported. sqlx would treat any other URL as a file
+    // name and silently create a local database (e.g. for a postgres:// URL).
+    if !db_url.starts_with("sqlite:") {
+        return Err(crate::DeltaError::Storage(format!(
+            "unsupported database URL '{}': only sqlite: URLs are supported",
+            db_url.split(['@', '?']).next().unwrap_or("")
+        )));
+    }
     let url = db_url.strip_prefix("sqlite://").unwrap_or(db_url);
 
     // Ensure parent directory exists

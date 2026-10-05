@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
     if cli.private {
         config.auth.enabled = true;
         config.federation.enabled = false;
-        config.server.cors_origins = vec![];
+        // (Configured CORS origins are kept: an empty list means "any origin".)
         tracing::info!("running in private instance mode");
     }
 
@@ -70,11 +70,12 @@ async fn main() -> anyhow::Result<()> {
         config.storage.db_url = format!("sqlite://{}?mode=rwc", data.join("delta.db").display());
     }
 
-    if config.auth.secrets_key == "delta-change-me-in-production"
-        || config.auth.secrets_key == "change-me-to-a-strong-random-passphrase"
-    {
+    if config.auth.secrets_key.is_empty() {
+        anyhow::bail!("auth.secrets_key must not be empty");
+    }
+    if config.auth.secrets_key_is_placeholder() {
         tracing::warn!(
-            "secrets_key is set to a default value — pipeline secrets are NOT secure. \
+            "secrets_key is set to a sample value — pipeline secrets are NOT secure. \
              Set auth.secrets_key in your config file."
         );
     }

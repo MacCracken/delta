@@ -213,21 +213,26 @@ async fn test_db_init_pool_reopens_existing_database() {
     let tmp = tempfile::tempdir().unwrap();
     let url = format!("sqlite://{}", tmp.path().join("delta.db").display());
 
+    let applied = |pool: sqlx::SqlitePool| async move {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM schema_migrations")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
+
     let pool = db::init_pool(&url).await.unwrap();
     db::user::create(&pool, "first", "first@test.com", "pass", false)
         .await
         .unwrap();
+    let applied_first = applied(pool.clone()).await;
+    assert!(applied_first >= 15);
     pool.close().await;
 
     // A restart must not re-run non-idempotent migrations (ADD COLUMN).
     let pool = db::init_pool(&url).await.unwrap();
     let user = db::user::get_by_username(&pool, "first").await.unwrap();
     assert_eq!(user.username, "first");
-    let applied: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(applied, 16);
+    assert_eq!(applied(pool.clone()).await, applied_first);
 }
 
 #[tokio::test]
@@ -270,4 +275,19 @@ async fn test_db_init_pool_upgrades_untracked_legacy_database() {
     let user = db::user::get_by_username(&pool, "legacy").await.unwrap();
     // The earliest user of an install without an admin is promoted.
     assert!(user.is_admin);
+}
+
+#[tokio::test]
+async fn test_db_init_pool_rejects_non_sqlite_urls() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = std::env::current_dir().unwrap();
+    for url in ["postgres://delta:pw@db/delta", "mysql://localhost/x"] {
+        let err = db::init_pool(url).await.unwrap_err();
+        assert!(err.to_string().contains("only sqlite"), "{err}");
+        // The password must not be echoed back.
+        assert!(!err.to_string().contains("pw@"), "{err}");
+    }
+    // Nothing was created as a side effect.
+    assert!(!cwd.join("postgres:").exists());
+    drop(tmp);
 }
