@@ -42,6 +42,10 @@ pub enum SandboxMode {
 }
 
 /// Execute a single job's steps in order.
+///
+/// `secret_needles` (see [`crate::mask::secret_needles`]) are redacted from
+/// every output line before it is streamed or buffered.
+#[allow(clippy::too_many_arguments)]
 pub async fn execute_job(
     job_name: &str,
     job: &Job,
@@ -50,6 +54,7 @@ pub async fn execute_job(
     job_id: Option<&str>,
     sender: Option<&broadcast::Sender<PipelineEvent>>,
     sandbox: &SandboxMode,
+    secret_needles: &[String],
 ) -> JobResult {
     let mut steps = Vec::new();
     let mut all_passed = true;
@@ -76,7 +81,15 @@ pub async fn execute_job(
         }
 
         let result = run_step(
-            &step_name, cmd, work_dir, env_vars, step_idx, job_id, sender, sandbox,
+            &step_name,
+            cmd,
+            work_dir,
+            env_vars,
+            step_idx,
+            job_id,
+            sender,
+            sandbox,
+            secret_needles,
         )
         .await;
 
@@ -327,16 +340,19 @@ const STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60
 const MAX_OUTPUT_SIZE: usize = 2 * 1024 * 1024;
 
 /// Build the Command for a step, applying sandbox if configured.
+///
+/// Fails if the requested sandbox cannot be prepared; the step must not run
+/// unsandboxed in that case.
 fn build_step_command(
     cmd: &str,
     work_dir: &Path,
     env_vars: &HashMap<String, String>,
     sandbox: &SandboxMode,
-) -> Command {
+) -> Result<Command, String> {
     match sandbox {
-        SandboxMode::Container { runtime, image } => {
-            crate::container::build_container_command(runtime, image, cmd, work_dir, env_vars)
-        }
+        SandboxMode::Container { runtime, image } => Ok(crate::container::build_container_command(
+            runtime, image, cmd, work_dir, env_vars,
+        )),
         _ => {
             let mut command = Command::new("sh");
             command
@@ -347,19 +363,18 @@ fn build_step_command(
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
 
-            // Apply Landlock sandbox on Linux
+            // Apply Landlock + seccomp on Linux. Everything is prepared here,
+            // in the parent; the child only issues the restricting syscalls.
             #[cfg(target_os = "linux")]
             if matches!(sandbox, SandboxMode::Landlock) {
-                let sandbox_work_dir = work_dir.to_path_buf();
+                let mut prepared = crate::sandbox::PreparedSandbox::prepare(work_dir)?;
+                // SAFETY: `PreparedSandbox::apply` is async-signal-safe.
                 unsafe {
-                    command.pre_exec(move || {
-                        crate::sandbox::apply_sandbox(&sandbox_work_dir)
-                            .map_err(std::io::Error::other)
-                    });
+                    command.pre_exec(move || prepared.apply());
                 }
             }
 
-            command
+            Ok(command)
         }
     }
 }
@@ -374,10 +389,21 @@ async fn run_step(
     job_id: Option<&str>,
     sender: Option<&broadcast::Sender<PipelineEvent>>,
     sandbox: &SandboxMode,
+    secret_needles: &[String],
 ) -> StepResult {
     tracing::info!(step = name, "executing step");
 
-    let mut command = build_step_command(cmd, work_dir, env_vars, sandbox);
+    let mut command = match build_step_command(cmd, work_dir, env_vars, sandbox) {
+        Ok(command) => command,
+        Err(e) => {
+            return StepResult {
+                name: name.to_string(),
+                exit_code: -1,
+                stdout: String::new(),
+                stderr: format!("failed to set up sandbox: {}", e),
+            };
+        }
+    };
 
     let mut child = match command.spawn() {
         Ok(c) => c,
@@ -425,6 +451,7 @@ async fn run_step(
                 }, if !stdout_done => {
                     match line {
                         Ok(Some(l)) => {
+                            let l = crate::mask::mask_secrets(&l, secret_needles);
                             if let (Some(tx), Some(jid)) = (&tx, &jid) {
                                 let _ = tx.send(PipelineEvent::StepOutput {
                                     job_id: jid.clone(),
@@ -455,6 +482,7 @@ async fn run_step(
                 }, if !stderr_done => {
                     match line {
                         Ok(Some(l)) => {
+                            let l = crate::mask::mask_secrets(&l, secret_needles);
                             if let (Some(tx), Some(jid)) = (&tx, &jid) {
                                 let _ = tx.send(PipelineEvent::StepOutput {
                                     job_id: jid.clone(),
@@ -654,11 +682,58 @@ mod tests {
             None,
             None,
             &SandboxMode::None,
+            &[],
         )
         .await;
         assert!(result.success);
         assert_eq!(result.steps.len(), 2);
         assert!(result.steps[0].stdout.contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_job_masks_secrets_in_stream_and_output() {
+        let job = Job {
+            name: None,
+            runs_on: None,
+            needs: vec![],
+            steps: vec![Step {
+                name: Some("Leak".into()),
+                run: Some("echo \"token=$API_TOKEN\"; echo \"$API_TOKEN\" >&2".into()),
+                uses: None,
+                with: HashMap::new(),
+            }],
+            uses: None,
+            with: HashMap::new(),
+            strategy: None,
+        };
+        let mut env = HashMap::new();
+        env.insert("API_TOKEN".to_string(), "hunter2-Secret".to_string());
+        let needles = crate::mask::secret_needles(["hunter2-Secret"]);
+        let (tx, mut rx) = broadcast::channel(64);
+
+        let result = execute_job(
+            "test",
+            &job,
+            std::path::Path::new("/tmp"),
+            &env,
+            Some("job-1"),
+            Some(&tx),
+            &SandboxMode::None,
+            &needles,
+        )
+        .await;
+        assert!(result.success);
+        assert!(!result.steps[0].stdout.contains("hunter2"));
+        assert!(!result.steps[0].stderr.contains("hunter2"));
+
+        let mut streamed = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let PipelineEvent::StepOutput { line, .. } = event {
+                streamed.push(line);
+            }
+        }
+        assert!(streamed.contains(&"token=***".to_string()));
+        assert!(streamed.iter().all(|l| !l.contains("hunter2")));
     }
 
     #[tokio::test]
@@ -694,6 +769,7 @@ mod tests {
             None,
             None,
             &SandboxMode::None,
+            &[],
         )
         .await;
         assert!(!result.success);

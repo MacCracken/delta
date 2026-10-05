@@ -7,6 +7,7 @@
 pub mod container;
 pub mod events;
 pub mod executor;
+pub mod mask;
 pub mod parser;
 pub mod pipeline;
 pub mod remote;

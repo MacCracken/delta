@@ -24,13 +24,36 @@ pub fn detect_runtime() -> Option<String> {
     None
 }
 
-/// Validate a container image name. Must have at most one `:` (for tag separator),
-/// no path traversal sequences, and no other dangerous characters.
-/// Returns the validated image or falls back to a safe default.
+/// Validate a container image reference of the form `name[:tag]`.
+///
+/// Only single-component names (official images such as `alpine:3.20` or
+/// `rust:1.99`) are accepted. The name must start with a lowercase letter or
+/// digit, so the image can never be parsed as a `docker run`/`podman run`
+/// option (e.g. `--privileged`). Invalid images fall back to a safe default.
 fn validate_image(image: &str) -> String {
-    let colon_count = image.chars().filter(|&c| c == ':').count();
-    let has_traversal = image.contains("..") || image.contains('/');
-    if colon_count > 1 || has_traversal || image.is_empty() {
+    let (name, tag) = match image.split_once(':') {
+        Some((name, tag)) => (name, Some(tag)),
+        None => (image, None),
+    };
+    let name_ok = name.len() <= 128
+        && name
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'))
+        && !name.contains("..");
+    // Docker tag grammar: [A-Za-z0-9_][A-Za-z0-9_.-]{0,127}
+    let tag_ok = tag.is_none_or(|t| {
+        t.len() <= 128
+            && t.chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+            && t.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+    });
+    if !(name_ok && tag_ok) {
         tracing::warn!(
             image = image,
             "invalid container image name, falling back to alpine:latest"
@@ -124,6 +147,34 @@ mod tests {
         // Verify the command is constructed (we can't easily inspect tokio::Command internals,
         // but at least verify it doesn't panic)
         let _ = format!("{:?}", cmd);
+    }
+
+    #[test]
+    fn test_validate_image_accepts_official_images() {
+        assert_eq!(validate_image("alpine"), "alpine");
+        assert_eq!(validate_image("alpine:3.20"), "alpine:3.20");
+        assert_eq!(validate_image("rust:1.99-bookworm"), "rust:1.99-bookworm");
+    }
+
+    #[test]
+    fn test_validate_image_rejects_option_injection() {
+        for image in [
+            "--privileged",
+            "-v",
+            "--pid=host",
+            "--cap-add=SYS_ADMIN",
+            "--security-opt=seccomp=unconfined",
+            "alpine:-x",
+            ":latest",
+            "",
+            "Alpine",
+            "evil/image",
+            "a..b",
+            "alpine:1:2",
+            "alpine latest",
+        ] {
+            assert_eq!(validate_image(image), "alpine:latest", "accepted {image:?}");
+        }
     }
 
     #[test]

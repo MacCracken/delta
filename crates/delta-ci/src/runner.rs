@@ -132,6 +132,8 @@ async fn run_pipelines(
             env_vars.insert("DELTA_REF".into(), r.to_string());
         }
 
+        let secret_needles = crate::mask::secret_needles(ctx.secrets.values().map(String::as_str));
+
         let mut pipeline_passed = true;
 
         for job_name in &job_order {
@@ -280,54 +282,18 @@ async fn run_pipelines(
                 Some(&job_run.id),
                 Some(&tx),
                 &job_sandbox,
+                &secret_needles,
             )
             .await;
 
             // Store step logs (mask secret values)
             for (idx, step) in result.steps.iter().enumerate() {
-                let mut output = format!("{}{}", step.stdout, step.stderr);
-                for secret_value in ctx.secrets.values() {
-                    if !secret_value.is_empty() {
-                        // Case-insensitive masking (char-safe for UTF-8)
-                        let lower_secret = secret_value.to_lowercase();
-                        let secret_chars: Vec<char> = lower_secret.chars().collect();
-                        let output_chars: Vec<char> = output.chars().collect();
-                        let lower_chars: Vec<char> = output.to_lowercase().chars().collect();
-                        let mut masked = String::with_capacity(output.len());
-                        let mut i = 0;
-                        while i < output_chars.len() {
-                            if i + secret_chars.len() <= lower_chars.len()
-                                && lower_chars[i..i + secret_chars.len()] == secret_chars[..]
-                            {
-                                masked.push_str("***");
-                                i += secret_chars.len();
-                            } else {
-                                masked.push(output_chars[i]);
-                                i += 1;
-                            }
-                        }
-                        output = masked;
-                        // Also mask URL-encoded form
-                        let url_encoded: String = secret_value
-                            .bytes()
-                            .map(|b| {
-                                if b.is_ascii_alphanumeric()
-                                    || b == b'-'
-                                    || b == b'_'
-                                    || b == b'.'
-                                    || b == b'~'
-                                {
-                                    (b as char).to_string()
-                                } else {
-                                    format!("%{:02X}", b)
-                                }
-                            })
-                            .collect();
-                        if url_encoded != *secret_value {
-                            output = output.replace(&url_encoded, "***");
-                        }
-                    }
-                }
+                // Lines were masked as they streamed; mask the joined output
+                // again to catch multi-line secrets.
+                let output = crate::mask::mask_secrets(
+                    &format!("{}{}", step.stdout, step.stderr),
+                    &secret_needles,
+                );
                 let status = if step.exit_code == 0 {
                     "passed"
                 } else {

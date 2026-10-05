@@ -598,58 +598,17 @@ async fn mask_secrets_for_job(state: &AppState, repo_id: &str, output: &str) -> 
     let encryption_key = delta_core::crypto::derive_key(&state.config.auth.secrets_key);
     let secrets = match db::secret::get_all_values(&state.db, repo_id).await {
         Ok(s) => s,
-        Err(_) => return output.to_string(),
-    };
-
-    let mut masked = output.to_string();
-    for (_, encrypted_value) in &secrets {
-        if let Ok(value) = delta_core::crypto::decrypt(&encryption_key, encrypted_value)
-            && !value.is_empty()
-        {
-            // Case-insensitive replacement
-            let lower_masked = masked.to_lowercase();
-            let lower_value = value.to_lowercase();
-            let mut result = String::with_capacity(masked.len());
-            let mut search_start = 0;
-            while let Some(pos) = lower_masked[search_start..].find(&lower_value) {
-                let abs_pos = search_start + pos;
-                result.push_str(&masked[search_start..abs_pos]);
-                result.push_str("***");
-                search_start = abs_pos + value.len();
-            }
-            result.push_str(&masked[search_start..]);
-            masked = result;
-
-            // Also mask URL-encoded form
-            let url_encoded: String = value
-                .bytes()
-                .map(|b| {
-                    if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~'
-                    {
-                        (b as char).to_string()
-                    } else {
-                        format!("%{:02X}", b)
-                    }
-                })
-                .collect();
-            if url_encoded != value {
-                // Case-insensitive replacement for URL-encoded form
-                let lower_masked2 = masked.to_lowercase();
-                let lower_encoded = url_encoded.to_lowercase();
-                let mut result2 = String::with_capacity(masked.len());
-                let mut search_start2 = 0;
-                while let Some(pos) = lower_masked2[search_start2..].find(&lower_encoded) {
-                    let abs_pos = search_start2 + pos;
-                    result2.push_str(&masked[search_start2..abs_pos]);
-                    result2.push_str("***");
-                    search_start2 = abs_pos + url_encoded.len();
-                }
-                result2.push_str(&masked[search_start2..]);
-                masked = result2;
-            }
+        Err(e) => {
+            tracing::error!(repo_id, "failed to load secrets for log masking: {}", e);
+            return output.to_string();
         }
-    }
-    masked
+    };
+    let values: Vec<String> = secrets
+        .iter()
+        .filter_map(|(_, encrypted)| delta_core::crypto::decrypt(&encryption_key, encrypted).ok())
+        .collect();
+    let needles = delta_ci::mask::secret_needles(values.iter().map(String::as_str));
+    delta_ci::mask::mask_secrets(output, &needles)
 }
 
 /// Check if all jobs in a pipeline are terminal (passed/failed/cancelled).
