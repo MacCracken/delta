@@ -91,17 +91,35 @@ pub async fn get_signing_key(pool: &SqlitePool, key_id: &str) -> Result<SigningK
         .ok_or_else(|| DeltaError::Registry("signing key not found".into()))
 }
 
+/// Delete (revoke) a signing key together with every signature made with
+/// it, so artifacts no longer verify against a revoked key. (Signatures
+/// reference the key, so the key alone could never be deleted once used.)
 pub async fn delete_signing_key(pool: &SqlitePool, key_id: &str, user_id: &str) -> Result<()> {
-    let result = sqlx::query("DELETE FROM user_signing_keys WHERE id = ? AND user_id = ?")
+    let storage = |e: sqlx::Error| DeltaError::Registry(e.to_string());
+    let mut tx = pool.begin().await.map_err(storage)?;
+    let owned = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM user_signing_keys WHERE id = ? AND user_id = ?",
+    )
+    .bind(key_id)
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(storage)?;
+    if owned == 0 {
+        return Err(DeltaError::NotFound("signing key not found".into()));
+    }
+    sqlx::query("DELETE FROM artifact_signatures WHERE signer_key_id = ?")
+        .bind(key_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(storage)?;
+    sqlx::query("DELETE FROM user_signing_keys WHERE id = ? AND user_id = ?")
         .bind(key_id)
         .bind(user_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
-        .map_err(|e| DeltaError::Registry(e.to_string()))?;
-    if result.rows_affected() == 0 {
-        return Err(DeltaError::Registry("signing key not found".into()));
-    }
-    Ok(())
+        .map_err(storage)?;
+    tx.commit().await.map_err(storage)
 }
 
 // --- Artifact Signatures ---

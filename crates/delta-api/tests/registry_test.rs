@@ -208,3 +208,49 @@ async fn ark_packages_follow_repository_visibility() {
     let status = res.status();
     assert_eq!(status, StatusCode::OK, "{}", res.text().await.unwrap());
 }
+
+#[tokio::test]
+async fn lfs_batch_returns_absolute_urls_and_uploads_are_idempotent() {
+    let server = start_server().await;
+    let token = create_user_and_repo(&server, "lena", "media", "public").await;
+    let client = reqwest::Client::new();
+    let data = b"large file contents".to_vec();
+    let oid = hex::encode(Sha256::digest(&data));
+
+    let batch: serde_json::Value = client
+        .post(format!(
+            "{}/lena/media.git/info/lfs/objects/batch",
+            server.base
+        ))
+        .header("authorization", basic("lena", &token))
+        .header("content-type", "application/vnd.git-lfs+json")
+        .json(&serde_json::json!({
+            "operation": "upload",
+            "transfers": ["basic"],
+            "objects": [{ "oid": oid, "size": data.len() }],
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let href = batch["objects"][0]["actions"]["upload"]["href"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // git-lfs rejects relative URLs ("missing protocol").
+    assert!(href.starts_with("http://"), "{href}");
+
+    for _ in 0..2 {
+        let status = client
+            .put(&href)
+            .header("authorization", basic("lena", &token))
+            .body(data.clone())
+            .send()
+            .await
+            .unwrap()
+            .status();
+        assert_eq!(status, StatusCode::OK);
+    }
+}

@@ -293,7 +293,10 @@ async fn add_signature(
     AuthUser(user): AuthUser,
     Json(req): Json<AddSignatureRequest>,
 ) -> Result<(StatusCode, Json<db::signing::ArtifactSignature>), (StatusCode, String)> {
-    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
+    let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
+    // Attaching a signature vouches for the artifact on the repository's
+    // behalf; read access is not enough.
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
     let artifact = db::artifact::get(&state.db, &artifact_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
@@ -386,7 +389,7 @@ async fn verify_signatures(
     let mut results = Vec::new();
     for sig in sigs {
         let key = db::signing::get_signing_key(&state.db, &sig.signer_key_id).await;
-        let (valid, key_name) = match key {
+        let (valid, key_name, signer) = match key {
             Ok(k) => {
                 let v = delta_registry::signing::verify_signature(
                     &k.public_key_hex,
@@ -394,13 +397,18 @@ async fn verify_signatures(
                     &sig.signature_hex,
                 )
                 .unwrap_or(false);
-                (v, k.name)
+                let signer = db::user::get_by_id(&state.db, &k.user_id)
+                    .await
+                    .ok()
+                    .map(|u| u.username);
+                (v, k.name, signer)
             }
-            Err(_) => (false, "unknown".to_string()),
+            Err(_) => (false, "unknown".to_string(), None),
         };
         results.push(delta_registry::signing::VerificationResult {
             key_id: sig.signer_key_id,
             key_name,
+            signer,
             valid,
         });
     }

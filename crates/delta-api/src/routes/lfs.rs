@@ -93,6 +93,35 @@ struct BatchError {
     message: String,
 }
 
+/// Scheme and authority clients use to reach this server, without a
+/// trailing slash: `server.external_url`, else `federation.instance_url`,
+/// else derived from the request's Host header.
+fn external_base_url(state: &AppState, headers: &HeaderMap) -> String {
+    if let Some(url) = state.config.server.external_url.as_deref().or(state
+        .config
+        .federation
+        .instance_url
+        .as_deref())
+    {
+        return url.trim_end_matches('/').to_string();
+    }
+    let host = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .filter(|h| !h.is_empty() && !h.contains(['/', ' ', '@']))
+        .unwrap_or("localhost");
+    let scheme = if state.config.server.trust_forwarded_for {
+        headers
+            .get("x-forwarded-proto")
+            .and_then(|v| v.to_str().ok())
+            .filter(|p| *p == "https" || *p == "http")
+            .unwrap_or("http")
+    } else {
+        "http"
+    };
+    format!("{scheme}://{host}")
+}
+
 /// POST /{owner}/{repo}.git/info/lfs/objects/batch
 ///
 /// The main LFS batch API endpoint. Clients send a list of objects they
@@ -128,8 +157,9 @@ async fn batch(
         ));
     };
 
-    // Build base URL for object actions
-    let base_url = format!("/{}/{}/info/lfs/objects", owner, repo);
+    // Build base URL for object actions. git-lfs needs absolute URLs.
+    let origin = external_base_url(&state, &headers);
+    let base_url = format!("{origin}/{owner}/{repo}/info/lfs/objects");
 
     // Forward auth header for action URLs
     let auth_header = headers
@@ -232,7 +262,7 @@ async fn batch(
                                 expires_in: 3600,
                             }),
                             verify: Some(BatchAction {
-                                href: format!("/{}/{}/info/lfs/objects/verify", owner, repo),
+                                href: format!("{base_url}/verify"),
                                 header: header_map,
                                 expires_in: 3600,
                             }),
@@ -329,11 +359,19 @@ async fn upload(
         .store_verified(&body, &oid)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 
-    // Record in DB
+    // Record in DB. A retried or concurrent upload of the same object finds
+    // it already recorded, which is success.
     let size = body.len() as i64;
-    let _ = db::lfs::create(&state.db, &repo_id, &oid, size)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    match db::lfs::create(&state.db, &repo_id, &oid, size).await {
+        Ok(_) | Err(delta_core::DeltaError::Conflict(_)) => {}
+        Err(e) => {
+            tracing::error!("failed to record LFS object: {}", e);
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            ));
+        }
+    }
 
     Ok(StatusCode::OK.into_response())
 }

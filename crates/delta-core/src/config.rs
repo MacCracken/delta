@@ -39,6 +39,11 @@ pub struct ServerConfig {
     /// the header; otherwise clients can choose their own rate-limit key.
     #[serde(default)]
     pub trust_forwarded_for: bool,
+    /// Public base URL of this server (e.g. `https://delta.example.com`),
+    /// used where absolute URLs must be handed to clients (Git LFS).
+    /// Defaults to `federation.instance_url`, then the request's Host.
+    #[serde(default)]
+    pub external_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -320,6 +325,7 @@ impl Default for DeltaConfig {
                 api_prefix: "/api/v1".into(),
                 cors_origins: vec![],
                 trust_forwarded_for: false,
+                external_url: None,
             },
             storage: StorageConfig {
                 repos_dir: PathBuf::from("/var/lib/delta/repos"),
