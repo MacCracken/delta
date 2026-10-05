@@ -300,17 +300,20 @@ pub async fn complete_queued_job(pool: &SqlitePool, queue_id: &str, runner_id: &
 }
 
 /// Reclaim jobs stuck in 'claimed' status where the runner's heartbeat
-/// is older than `stale_minutes` minutes ago. Resets them to 'pending'.
+/// is older than `stale_minutes` minutes ago, or whose runner was deleted
+/// (`claimed_by` is set to NULL by the foreign key). Resets them to 'pending'.
 /// Returns the count of reclaimed jobs.
 pub async fn reclaim_stale_jobs(pool: &SqlitePool, stale_minutes: i64) -> Result<u64> {
+    // Heartbeats are stored as RFC3339; normalize with datetime() before
+    // comparing so the text comparison is chronological.
     let result = sqlx::query(
         "UPDATE runner_job_queue SET status = 'pending', claimed_by = NULL
          WHERE status = 'claimed'
-         AND claimed_by IN (
+         AND (claimed_by IS NULL OR claimed_by IN (
              SELECT id FROM runners
-             WHERE last_heartbeat_at < datetime('now', '-' || ? || ' minutes')
-                OR last_heartbeat_at IS NULL
-         )",
+             WHERE last_heartbeat_at IS NULL
+                OR datetime(last_heartbeat_at) < datetime('now', '-' || ? || ' minutes')
+         ))",
     )
     .bind(stale_minutes)
     .execute(pool)

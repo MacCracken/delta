@@ -127,6 +127,11 @@ async fn register(
     .await
     .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
 
+    // The first account on a fresh install becomes the site admin.
+    if let Err(e) = delta_core::db::user::ensure_bootstrap_admin(&state.db).await {
+        tracing::error!("admin bootstrap failed: {}", e);
+    }
+
     let (raw_token, token_hash) = auth::generate_token().map_err(|e| {
         tracing::error!("internal error: {}", e);
         (

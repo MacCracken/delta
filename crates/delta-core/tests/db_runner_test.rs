@@ -376,14 +376,14 @@ async fn test_reclaim_stale_jobs() {
     // Claim the job
     db::runner::poll_job(&pool, &runner.id, &[]).await.unwrap();
 
-    // Set heartbeat to very old
-    sqlx::query(
-        "UPDATE runners SET last_heartbeat_at = datetime('now', '-120 minutes') WHERE id = ?",
-    )
-    .bind(&runner.id)
-    .execute(&pool)
-    .await
-    .unwrap();
+    // Set heartbeat to very old, in the RFC3339 format heartbeats are stored in
+    let old = (chrono::Utc::now() - chrono::Duration::minutes(120)).to_rfc3339();
+    sqlx::query("UPDATE runners SET last_heartbeat_at = ? WHERE id = ?")
+        .bind(&old)
+        .bind(&runner.id)
+        .execute(&pool)
+        .await
+        .unwrap();
 
     // Reclaim with 60 min threshold
     let reclaimed = db::runner::reclaim_stale_jobs(&pool, 60).await.unwrap();
@@ -406,4 +406,57 @@ async fn test_set_job_runner() {
 
     let job = db::pipeline::get_job(&pool, &job_run_id).await.unwrap();
     assert_eq!(job.runner.as_deref(), Some("my-runner"));
+}
+
+#[tokio::test]
+async fn test_reclaim_ignores_fresh_heartbeat() {
+    let pool = common::setup_pool().await;
+    let (repo_id, pipeline_id, job_run_id) = create_pipeline_and_job(&pool).await;
+    let runner = db::runner::register(&pool, "fresh-runner", "hash", &[])
+        .await
+        .unwrap();
+    db::runner::enqueue_job(
+        &pool,
+        "q-fresh",
+        &job_run_id,
+        &pipeline_id,
+        &repo_id,
+        &[],
+        "{}",
+    )
+    .await
+    .unwrap();
+    db::runner::poll_job(&pool, &runner.id, &[]).await.unwrap();
+    db::runner::heartbeat(&pool, &runner.id).await.unwrap();
+
+    let reclaimed = db::runner::reclaim_stale_jobs(&pool, 10).await.unwrap();
+    assert_eq!(reclaimed, 0);
+}
+
+#[tokio::test]
+async fn test_reclaim_jobs_of_deleted_runner() {
+    let pool = common::setup_pool().await;
+    let (repo_id, pipeline_id, job_run_id) = create_pipeline_and_job(&pool).await;
+    let runner = db::runner::register(&pool, "doomed-runner", "hash", &[])
+        .await
+        .unwrap();
+    db::runner::enqueue_job(
+        &pool,
+        "q-doomed",
+        &job_run_id,
+        &pipeline_id,
+        &repo_id,
+        &[],
+        "{}",
+    )
+    .await
+    .unwrap();
+    db::runner::poll_job(&pool, &runner.id, &[]).await.unwrap();
+
+    // Deleting the runner nulls `claimed_by` but leaves the job 'claimed'.
+    db::runner::delete(&pool, &runner.id).await.unwrap();
+    let reclaimed = db::runner::reclaim_stale_jobs(&pool, 10).await.unwrap();
+    assert_eq!(reclaimed, 1);
+    let job = db::runner::get_queued_job(&pool, "q-doomed").await.unwrap();
+    assert_eq!(job.status, "pending");
 }

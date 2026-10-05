@@ -201,3 +201,52 @@ async fn test_ssh_key_fingerprint_not_found() {
         .unwrap();
     assert!(result.is_none());
 }
+
+#[tokio::test]
+async fn test_token_expiry_is_enforced_to_the_second() {
+    let pool = common::setup_pool().await;
+    let user = common::create_test_user(&pool).await;
+    let user_id = user.id.to_string();
+
+    // RFC3339, as written by the API. An hour in the past must be rejected
+    // even though the date part matches today.
+    let expired = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+    db::user::create_token(&pool, &user_id, "old", "hash-expired", "*", Some(&expired))
+        .await
+        .unwrap();
+    assert!(
+        db::user::get_by_token_hash(&pool, "hash-expired")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let valid = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    db::user::create_token(&pool, &user_id, "new", "hash-valid", "*", Some(&valid))
+        .await
+        .unwrap();
+    assert!(
+        db::user::get_by_token_hash(&pool, "hash-valid")
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn test_bootstrap_admin_promotes_only_first_user() {
+    let pool = common::setup_pool().await;
+    let first = common::create_test_user(&pool).await;
+    db::user::ensure_bootstrap_admin(&pool).await.unwrap();
+    let second = common::create_second_user(&pool).await;
+    db::user::ensure_bootstrap_admin(&pool).await.unwrap();
+
+    let first = db::user::get_by_id(&pool, &first.id.to_string())
+        .await
+        .unwrap();
+    let second = db::user::get_by_id(&pool, &second.id.to_string())
+        .await
+        .unwrap();
+    assert!(first.is_admin);
+    assert!(!second.is_admin);
+}

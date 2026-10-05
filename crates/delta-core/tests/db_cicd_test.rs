@@ -207,3 +207,67 @@ async fn test_db_init_pool() {
         .unwrap();
     assert_eq!(user.username, "inituser");
 }
+
+#[tokio::test]
+async fn test_db_init_pool_reopens_existing_database() {
+    let tmp = tempfile::tempdir().unwrap();
+    let url = format!("sqlite://{}", tmp.path().join("delta.db").display());
+
+    let pool = db::init_pool(&url).await.unwrap();
+    db::user::create(&pool, "first", "first@test.com", "pass", false)
+        .await
+        .unwrap();
+    pool.close().await;
+
+    // A restart must not re-run non-idempotent migrations (ADD COLUMN).
+    let pool = db::init_pool(&url).await.unwrap();
+    let user = db::user::get_by_username(&pool, "first").await.unwrap();
+    assert_eq!(user.username, "first");
+    let applied: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(applied, 15);
+}
+
+#[tokio::test]
+async fn test_db_init_pool_upgrades_untracked_legacy_database() {
+    let tmp = tempfile::tempdir().unwrap();
+    let url = format!("sqlite://{}", tmp.path().join("delta.db").display());
+
+    // Recreate the layout older releases left behind: every migration applied
+    // once, `is_admin` added out of band, and no `schema_migrations` table.
+    {
+        let pool = sqlx::SqlitePool::connect(&format!("{url}?mode=rwc"))
+            .await
+            .unwrap();
+        for sql in [
+            include_str!("../migrations/001_initial.sql"),
+            include_str!("../migrations/002_git_protocol.sql"),
+            include_str!("../migrations/003_pull_requests.sql"),
+            include_str!("../migrations/004_cicd.sql"),
+            include_str!("../migrations/005_registry.sql"),
+            include_str!("../migrations/006_collaborators.sql"),
+            include_str!("../migrations/007_forks_and_templates.sql"),
+            include_str!("../migrations/008_lfs.sql"),
+            include_str!("../migrations/009_cascade_fixes.sql"),
+            include_str!("../migrations/010_search.sql"),
+            include_str!("../migrations/011_federation.sql"),
+            include_str!("../migrations/012_encryption.sql"),
+            include_str!("../migrations/013_workspaces.sql"),
+            include_str!("../migrations/015_runners.sql"),
+            "ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT FALSE",
+        ] {
+            sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+        }
+        db::user::create(&pool, "legacy", "legacy@test.com", "pass", false)
+            .await
+            .unwrap();
+        pool.close().await;
+    }
+
+    let pool = db::init_pool(&url).await.unwrap();
+    let user = db::user::get_by_username(&pool, "legacy").await.unwrap();
+    // The earliest user of an install without an admin is promoted.
+    assert!(user.is_admin);
+}
