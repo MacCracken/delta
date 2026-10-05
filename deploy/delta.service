@@ -5,7 +5,10 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=notify
+# The server does not speak the sd_notify protocol, so systemd must not wait
+# for READY=1 (Type=notify) or watchdog pings (WatchdogSec) — either would
+# get the service killed shortly after start.
+Type=exec
 ExecStart=/usr/local/bin/delta-server --config /etc/delta/config.toml
 Environment=RUST_LOG=info
 User=delta
@@ -13,7 +16,6 @@ Group=delta
 
 Restart=on-failure
 RestartSec=5s
-WatchdogSec=30s
 
 LimitNOFILE=65536
 LimitMEMLOCK=infinity
