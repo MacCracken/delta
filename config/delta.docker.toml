@@ -10,7 +10,8 @@ cors_origins = []
 [storage]
 repos_dir = "/var/lib/delta/repos"
 artifacts_dir = "/var/lib/delta/artifacts"
-db_url = "sqlite:///var/lib/delta/delta.db"
+# Keep the database on the delta-data volume (see docker-compose.yml).
+db_url = "sqlite:///var/lib/delta/data/delta.db?mode=rwc"
 
 [auth]
 enabled = true

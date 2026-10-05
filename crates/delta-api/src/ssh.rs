@@ -1,31 +1,34 @@
 //! Built-in SSH server for git transport.
 //!
-//! Accepts SSH connections, authenticates users via public key,
-//! and delegates to the same git backend as HTTP transport.
+//! Accepts SSH connections, authenticates users by public key, and serves
+//! `git-upload-pack` (clone/fetch) and `git-receive-pack` (push) over the
+//! session channel with the same access rules, branch protection and push
+//! events as the HTTP transport.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
-use delta_core::db;
 use delta_core::models::collaborator::CollaboratorRole;
-use delta_core::models::repo::Visibility;
+use delta_core::models::repo::{Repository, Visibility};
+use delta_core::models::user::User;
 use russh::keys::{self as russh_keys, HashAlg, PrivateKey, PublicKey};
-use russh::server::{Auth, Handler, Msg, Server, Session};
-use russh::{Channel, ChannelId, CryptoVec};
-use sqlx::SqlitePool;
-use tokio::sync::Mutex;
+use russh::server::{Auth, ChannelOpenHandle, Handler, Msg, Server, Session};
+use russh::{Channel, ChannelId, ChannelOpenFailure};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-/// Shared state for the SSH server.
-#[derive(Clone)]
-pub struct SshServerState {
-    pub pool: SqlitePool,
-    pub repos_dir: PathBuf,
-}
+use crate::state::AppState;
+
+/// Session channels (and so git processes) one connection may have open.
+const MAX_CHANNELS_PER_CONNECTION: usize = 4;
+/// Upper bound on one git command.
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 /// The SSH server — creates a new handler per connection.
 pub struct DeltaSshServer {
-    pub state: SshServerState,
+    state: AppState,
 }
 
 impl Server for DeltaSshServer {
@@ -35,22 +38,28 @@ impl Server for DeltaSshServer {
         SshSession {
             state: self.state.clone(),
             user: None,
-            channels: Arc::new(Mutex::new(HashMap::new())),
+            channels: HashMap::new(),
+            slots: Arc::new(Semaphore::new(MAX_CHANNELS_PER_CONNECTION)),
         }
     }
 }
 
 /// Per-connection session state.
 pub struct SshSession {
-    state: SshServerState,
-    /// Authenticated user info: (user_id, username)
-    user: Option<(String, String)>,
-    channels: Arc<Mutex<HashMap<ChannelId, ChannelState>>>,
+    state: AppState,
+    /// The authenticated user.
+    user: Option<User>,
+    /// Session channels that have not started a command yet.
+    channels: HashMap<ChannelId, PendingChannel>,
+    /// Bounds the channels open on this connection.
+    slots: Arc<Semaphore>,
 }
 
-struct ChannelState {
-    data: Vec<u8>,
-    command: Option<String>,
+struct PendingChannel {
+    channel: Channel<Msg>,
+    /// The client's `GIT_PROTOCOL` request (git sends it with `SendEnv`).
+    git_protocol: Option<String>,
+    _slot: OwnedSemaphorePermit,
 }
 
 impl Handler for SshSession {
@@ -61,18 +70,23 @@ impl Handler for SshSession {
         _user: &str,
         public_key: &PublicKey,
     ) -> Result<Auth, Self::Error> {
-        // Compute fingerprint using ssh-key's built-in method
         let fingerprint = public_key.fingerprint(HashAlg::Sha256).to_string();
-
-        let result = db::ssh_key::get_user_by_fingerprint(&self.state.pool, &fingerprint).await;
-
-        match result {
-            Ok(Some((user_id, username))) => {
-                tracing::info!(username = %username, "SSH auth success");
-                self.user = Some((user_id, username));
+        let user =
+            match delta_core::db::ssh_key::get_user_by_fingerprint(&self.state.db, &fingerprint)
+                .await
+            {
+                Ok(Some((user_id, _))) => delta_core::db::user::get_by_id(&self.state.db, &user_id)
+                    .await
+                    .ok(),
+                _ => None,
+            };
+        match user {
+            Some(user) => {
+                tracing::info!(username = %user.username, "SSH auth success");
+                self.user = Some(user);
                 Ok(Auth::Accept)
             }
-            _ => {
+            None => {
                 tracing::debug!(fingerprint = %fingerprint, "SSH auth failed: key not found");
                 Ok(Auth::reject())
             }
@@ -86,19 +100,45 @@ impl Handler for SshSession {
     async fn channel_open_session(
         &mut self,
         channel: Channel<Msg>,
+        reply: ChannelOpenHandle,
         _session: &mut Session,
-    ) -> Result<bool, Self::Error> {
+    ) -> Result<(), Self::Error> {
         if self.user.is_none() {
-            return Ok(false);
+            reply
+                .reject(ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
         }
-        self.channels.lock().await.insert(
+        let Ok(slot) = self.slots.clone().try_acquire_owned() else {
+            reply.reject(ChannelOpenFailure::ResourceShortage).await;
+            return Ok(());
+        };
+        self.channels.insert(
             channel.id(),
-            ChannelState {
-                data: Vec::new(),
-                command: None,
+            PendingChannel {
+                channel,
+                git_protocol: None,
+                _slot: slot,
             },
         );
-        Ok(true)
+        reply.accept().await;
+        Ok(())
+    }
+
+    async fn env_request(
+        &mut self,
+        channel_id: ChannelId,
+        variable_name: &str,
+        variable_value: &str,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        if variable_name == "GIT_PROTOCOL"
+            && is_valid_git_protocol(variable_value)
+            && let Some(pending) = self.channels.get_mut(&channel_id)
+        {
+            pending.git_protocol = Some(variable_value.to_string());
+        }
+        Ok(())
     }
 
     async fn exec_request(
@@ -107,267 +147,296 @@ impl Handler for SshSession {
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        let command = String::from_utf8_lossy(data).to_string();
+        let (Some(pending), Some(user)) = (self.channels.remove(&channel_id), self.user.clone())
+        else {
+            session.channel_failure(channel_id)?;
+            return Ok(());
+        };
+        session.channel_success(channel_id)?;
+        let command = String::from_utf8_lossy(data).into_owned();
         tracing::debug!(command = %command, "SSH exec request");
-
-        // Parse git command: "git-upload-pack '/owner/repo.git'"
-        let (service, repo_path) = match parse_git_command(&command) {
-            Some(parsed) => parsed,
-            None => {
-                session.channel_failure(channel_id)?;
-                return Ok(());
-            }
-        };
-
-        let (owner, repo_name) = match parse_repo_path(&repo_path) {
-            Some(parsed) => parsed,
-            None => {
-                let msg = format!("invalid repository path: {}\n", repo_path);
-                session.data(channel_id, CryptoVec::from(msg.as_bytes()))?;
-                session.close(channel_id)?;
-                return Ok(());
-            }
-        };
-
-        // Authorize
-        let (user_id, _username) = match &self.user {
-            Some(u) => u.clone(),
-            None => {
-                session.channel_failure(channel_id)?;
-                return Ok(());
-            }
-        };
-
-        if let Err(msg) = self.authorize(&service, &owner, &repo_name, &user_id).await {
-            let err = format!("ERROR: {}\n", msg);
-            session.data(channel_id, CryptoVec::from(err.as_bytes()))?;
-            session.close(channel_id)?;
-            return Ok(());
-        }
-
-        // Store command for this channel
-        if let Some(ch) = self.channels.lock().await.get_mut(&channel_id) {
-            ch.command = Some(command.clone());
-        }
-
-        let disk_path = self
-            .state
-            .repos_dir
-            .join(&owner)
-            .join(format!("{}.git", repo_name));
-
-        if !disk_path.exists() {
-            let msg = format!("repository not found: {}/{}\n", owner, repo_name);
-            session.data(channel_id, CryptoVec::from(msg.as_bytes()))?;
-            session.close(channel_id)?;
-            return Ok(());
-        }
-
-        // For upload-pack (clone/fetch), run immediately with empty stdin
-        if service == "upload-pack" {
-            let output = delta_vcs::protocol::upload_pack(&disk_path, &[]).await;
-            match output {
-                Ok(data) => {
-                    session.data(channel_id, CryptoVec::from_slice(&data))?;
-                }
-                Err(e) => {
-                    let msg = format!("git error: {}\n", e);
-                    session.data(channel_id, CryptoVec::from(msg.as_bytes()))?;
-                }
-            }
-            session.exit_status_request(channel_id, 0)?;
-            session.eof(channel_id)?;
-            session.close(channel_id)?;
-        }
-        // For receive-pack, data arrives via data() and completes on channel_eof()
-
+        tokio::spawn(serve_channel(self.state.clone(), user, command, pending));
         Ok(())
     }
 
-    async fn data(
-        &mut self,
-        channel_id: ChannelId,
-        data: &[u8],
-        _session: &mut Session,
-    ) -> Result<(), Self::Error> {
-        let mut channels = self.channels.lock().await;
-        if let Some(ch) = channels.get_mut(&channel_id) {
-            ch.data.extend_from_slice(data);
-        }
-        Ok(())
-    }
-
-    async fn channel_eof(
+    async fn shell_request(
         &mut self,
         channel_id: ChannelId,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        let channels = self.channels.lock().await;
-        let Some(ch) = channels.get(&channel_id) else {
+        let (Some(_), Some(user)) = (self.channels.remove(&channel_id), &self.user) else {
+            session.channel_failure(channel_id)?;
             return Ok(());
         };
-
-        let Some(command) = &ch.command else {
-            return Ok(());
-        };
-
-        // Only handle receive-pack EOF (upload-pack already completed)
-        if !command.contains("receive-pack") {
-            return Ok(());
-        }
-
-        let (_, repo_path) = match parse_git_command(command) {
-            Some(p) => p,
-            None => return Ok(()),
-        };
-        let (owner, repo_name) = match parse_repo_path(&repo_path) {
-            Some(p) => p,
-            None => return Ok(()),
-        };
-
-        let disk_path = self
-            .state
-            .repos_dir
-            .join(&owner)
-            .join(format!("{}.git", repo_name));
-
-        let input = ch.data.clone();
-        drop(channels);
-
-        let output = delta_vcs::protocol::receive_pack(&disk_path, &input).await;
-        match output {
-            Ok(data) => {
-                session.data(channel_id, CryptoVec::from_slice(&data))?;
-                session.exit_status_request(channel_id, 0)?;
-            }
-            Err(e) => {
-                let msg = format!("git error: {}\n", e);
-                session.data(channel_id, CryptoVec::from(msg.as_bytes()))?;
-                session.exit_status_request(channel_id, 1)?;
-            }
-        }
+        session.channel_success(channel_id)?;
+        let greeting = format!(
+            "Hi {}! You've successfully authenticated, but Delta does not provide shell access.\r\n",
+            user.username
+        );
+        session.extended_data(channel_id, 1, greeting.into_bytes())?;
+        session.exit_status_request(channel_id, 1)?;
         session.eof(channel_id)?;
         session.close(channel_id)?;
+        Ok(())
+    }
 
+    async fn subsystem_request(
+        &mut self,
+        channel_id: ChannelId,
+        _name: &str,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        session.channel_failure(channel_id)?;
+        Ok(())
+    }
+
+    async fn channel_close(
+        &mut self,
+        channel_id: ChannelId,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.channels.remove(&channel_id);
         Ok(())
     }
 }
 
-impl SshSession {
-    async fn authorize(
-        &self,
-        service: &str,
-        owner: &str,
-        repo_name: &str,
-        user_id: &str,
-    ) -> Result<(), String> {
-        let owner_user = db::user::get_by_username(&self.state.pool, owner)
-            .await
-            .map_err(|_| format!("user '{}' not found", owner))?;
+/// Run the command `user` sent on a channel and report how it went.
+async fn serve_channel(state: AppState, user: User, command: String, pending: PendingChannel) {
+    let PendingChannel {
+        channel,
+        git_protocol,
+        _slot,
+    } = pending;
+    let (mut read_half, write_half) = channel.split();
+    let mut input = read_half.make_reader();
+    let mut output = write_half.make_writer();
 
-        let owner_id = owner_user.id.to_string();
-        let repo = db::repo::get_by_owner_and_name(&self.state.pool, &owner_id, repo_name)
-            .await
-            .map_err(|_| format!("repository '{}/{}' not found", owner, repo_name))?;
+    let result = tokio::time::timeout(
+        COMMAND_TIMEOUT,
+        run_command(
+            &state,
+            &user,
+            &command,
+            git_protocol.as_deref(),
+            &mut input,
+            &mut output,
+        ),
+    )
+    .await
+    .unwrap_or_else(|_| Err("timed out".into()));
 
-        let is_owner = user_id == owner_id;
+    let status = match result {
+        Ok(()) => 0,
+        Err(message) => {
+            let mut stderr = write_half.make_writer_ext(Some(1));
+            let _ = stderr
+                .write_all(format!("ERROR: {message}\n").as_bytes())
+                .await;
+            1
+        }
+    };
+    // Close without waiting for the client's EOF, as sshd does once the
+    // command exits: OpenSSH clients only release their output (git's input)
+    // when the channel closes, and git holds its side open until then.
+    let _ = write_half.exit_status(status).await;
+    let _ = write_half.eof().await;
+    let _ = write_half.close().await;
+}
 
-        match service {
-            "upload-pack" => {
-                if repo.visibility == Visibility::Public || is_owner {
-                    Ok(())
-                } else {
-                    let role =
-                        db::collaborator::get_role(&self.state.pool, &repo.id.to_string(), user_id)
-                            .await
-                            .unwrap_or(None);
-                    if role.is_some() {
-                        Ok(())
-                    } else {
-                        Err("repository not found".into())
-                    }
-                }
-            }
-            "receive-pack" => {
-                if is_owner {
-                    Ok(())
-                } else {
-                    let role =
-                        db::collaborator::get_role(&self.state.pool, &repo.id.to_string(), user_id)
-                            .await
-                            .unwrap_or(None);
-                    match role {
-                        Some(r) if r.has(CollaboratorRole::Write) => Ok(()),
-                        _ => Err("permission denied: no push access".into()),
-                    }
-                }
-            }
-            _ => Err(format!("unsupported service: {}", service)),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GitService {
+    UploadPack,
+    ReceivePack,
+}
+
+/// Run one git command; `Err` carries the message for the client.
+async fn run_command<R, W>(
+    state: &AppState,
+    user: &User,
+    command: &str,
+    git_protocol: Option<&str>,
+    input: &mut R,
+    output: &mut W,
+) -> Result<(), String>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let (service, path) = parse_git_command(command)
+        .ok_or("unsupported command: only git clone, fetch and push are available")?;
+    let (owner, name) = parse_repo_path(&path).ok_or("invalid repository path")?;
+    let repo_path = state
+        .repo_host
+        .repo_path(&owner, &name)
+        .map_err(|_| "invalid repository path")?;
+    let repo = authorize(state, user, service, &owner, &name).await?;
+    if !repo_path.exists() {
+        return Err("repository not found".into());
+    }
+
+    match service {
+        GitService::UploadPack => upload_pack(&repo_path, git_protocol, input, output).await,
+        GitService::ReceivePack => {
+            // Branch protection needs the client's commands before git
+            // runs, so the push is split like a smart HTTP push: the ref
+            // advertisement first, then the commands and pack.
+            let advertisement =
+                delta_vcs::protocol::ref_advertisement(&repo_path, "git-receive-pack")
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("receive-pack advertisement failed: {}", e);
+                        "internal error".to_string()
+                    })?;
+            output
+                .write_all(&advertisement)
+                .await
+                .map_err(|e| e.to_string())?;
+            crate::routes::git::serve_push(state, &owner, &repo, &repo_path, user, input, output)
+                .await
+                .map_err(|(_, message)| message)
         }
     }
 }
 
-/// Parse "git-upload-pack '/owner/repo.git'" → ("upload-pack", "/owner/repo.git")
-fn parse_git_command(command: &str) -> Option<(String, String)> {
-    let parts: Vec<&str> = command.splitn(2, ' ').collect();
-    if parts.len() != 2 {
-        return None;
-    }
+/// Serve a clone or fetch: git talks to the client directly.
+async fn upload_pack<R, W>(
+    repo_path: &Path,
+    git_protocol: Option<&str>,
+    input: &mut R,
+    output: &mut W,
+) -> Result<(), String>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let internal = |e: &dyn std::fmt::Display| {
+        tracing::error!("SSH upload-pack failed: {}", e);
+        "internal error".to_string()
+    };
+    let mut child =
+        delta_vcs::protocol::spawn_service_session(repo_path, "upload-pack", git_protocol)
+            .map_err(|e| internal(&e))?;
+    let (Some(mut stdin), Some(mut stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        return Err(internal(&"git pipes unavailable"));
+    };
 
-    let service = parts[0];
-    if service != "git-upload-pack" && service != "git-receive-pack" {
-        return None;
+    // git reads requests while it writes responses, so both directions
+    // stream concurrently. Done when git is: the client may wait for the
+    // channel to close before it closes its own side.
+    let feed = async move {
+        let _ = tokio::io::copy(input, &mut stdin).await;
+        // Closing (not just shutting down) the pipe is what git sees as EOF.
+        drop(stdin);
+    };
+    let respond = tokio::io::copy(&mut stdout, output);
+    tokio::pin!(feed, respond);
+    let responded = tokio::select! {
+        responded = &mut respond => responded,
+        () = &mut feed => respond.await,
+    };
+    if let Err(e) = responded {
+        // Typically the client went away.
+        tracing::debug!("SSH upload-pack stream ended: {}", e);
+        return Err("fetch interrupted".into());
     }
+    let status = child.wait().await.map_err(|e| internal(&e))?;
+    if status.success() {
+        Ok(())
+    } else {
+        // git has already told the client what went wrong.
+        tracing::debug!(%status, "git upload-pack exited with error");
+        Err("fetch failed".into())
+    }
+}
 
-    let path = parts[1].trim_matches('\'').trim_matches('"').to_string();
-    let service_name = service.strip_prefix("git-").unwrap_or(service);
-    Some((service_name.to_string(), path))
+/// Check `user` may run `service` on `owner/name`. Repositories the user
+/// can't read are reported as missing.
+async fn authorize(
+    state: &AppState,
+    user: &User,
+    service: GitService,
+    owner: &str,
+    name: &str,
+) -> Result<Repository, String> {
+    let repo = crate::routes::git::find_repo(state, owner, name)
+        .await
+        .map_err(|(_, message)| message)?;
+    if repo.owner == user.id.to_string() {
+        return Ok(repo);
+    }
+    let role = delta_core::db::collaborator::get_role(
+        &state.db,
+        &repo.id.to_string(),
+        &user.id.to_string(),
+    )
+    .await
+    .unwrap_or(None);
+    let can_read = repo.visibility == Visibility::Public || role.is_some();
+    match service {
+        GitService::UploadPack if can_read => Ok(repo),
+        GitService::ReceivePack if role.is_some_and(|r| r.has(CollaboratorRole::Write)) => Ok(repo),
+        GitService::ReceivePack if can_read => {
+            Err("you don't have push access to this repository".into())
+        }
+        _ => Err("repository not found".into()),
+    }
+}
+
+/// `GIT_PROTOCOL` values passed on to git, e.g. `version=2`.
+fn is_valid_git_protocol(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"=:._-".contains(&b))
+}
+
+/// Parse "git-upload-pack '/owner/repo.git'" → (UploadPack, "/owner/repo.git")
+fn parse_git_command(command: &str) -> Option<(GitService, String)> {
+    let (service, path) = command.split_once(' ')?;
+    let service = match service {
+        "git-upload-pack" => GitService::UploadPack,
+        "git-receive-pack" => GitService::ReceivePack,
+        _ => return None,
+    };
+    let path = path.trim_matches('\'').trim_matches('"').to_string();
+    Some((service, path))
 }
 
 /// Parse "/owner/repo.git" → (owner, repo_name)
 fn parse_repo_path(path: &str) -> Option<(String, String)> {
     let path = path.strip_prefix('/').unwrap_or(path);
-    let parts: Vec<&str> = path.splitn(2, '/').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-
-    let owner = parts[0].to_string();
-    let repo = parts[1]
-        .strip_suffix(".git")
-        .unwrap_or(parts[1])
-        .to_string();
-
+    let (owner, repo) = path.split_once('/')?;
+    let repo = repo.strip_suffix(".git").unwrap_or(repo);
     if owner.is_empty() || repo.is_empty() {
         return None;
     }
-
-    Some((owner, repo))
+    Some((owner.to_string(), repo.to_string()))
 }
 
 /// Start the SSH server on the configured port.
-pub async fn start_ssh_server(
-    config: &delta_core::config::SshConfig,
-    pool: SqlitePool,
-    repos_dir: PathBuf,
-    host: &str,
-) -> anyhow::Result<()> {
-    let host_key = load_or_generate_host_key(config, &repos_dir)?;
+pub async fn start_ssh_server(state: AppState) -> anyhow::Result<()> {
+    let addr = format!("{}:{}", state.config.server.host, state.config.ssh.port);
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    tracing::info!("SSH server listening on {}", addr);
+    serve_ssh(state, listener).await
+}
+
+/// Serve SSH connections accepted from `listener`.
+pub async fn serve_ssh(state: AppState, listener: tokio::net::TcpListener) -> anyhow::Result<()> {
+    let host_key = load_or_generate_host_key(&state.config.ssh, &state.config.storage.repos_dir)?;
 
     let russh_config = russh::server::Config {
         keys: vec![host_key],
-        auth_rejection_time: std::time::Duration::from_secs(1),
-        auth_rejection_time_initial: Some(std::time::Duration::from_secs(0)),
+        auth_rejection_time: Duration::from_secs(1),
+        auth_rejection_time_initial: Some(Duration::from_secs(0)),
         ..Default::default()
     };
 
-    let state = SshServerState { pool, repos_dir };
     let mut server = DeltaSshServer { state };
-    let addr = format!("{}:{}", host, config.port);
-    tracing::info!("SSH server listening on {}", addr);
-
-    server.run_on_address(Arc::new(russh_config), &addr).await?;
-
+    server
+        .run_on_socket(Arc::new(russh_config), &listener)
+        .await?;
     Ok(())
 }
 
@@ -393,11 +462,12 @@ fn load_or_generate_host_key(
 
     // Generate new ed25519 key
     tracing::info!(path = %key_path.display(), "generating new SSH host key");
-    let key = PrivateKey::random(
-        &mut russh_keys::ssh_key::rand_core::OsRng,
-        russh_keys::Algorithm::Ed25519,
-    )
-    .map_err(|e| anyhow::anyhow!("failed to generate SSH host key: {}", e))?;
+    let mut seed = [0u8; 32];
+    getrandom::fill(&mut seed)
+        .map_err(|e| anyhow::anyhow!("failed to generate SSH host key: {}", e))?;
+    let key = PrivateKey::from(russh_keys::ssh_key::private::Ed25519Keypair::from_seed(
+        &seed,
+    ));
 
     // Ensure parent directory exists
     if let Some(parent) = key_path.parent() {
@@ -408,16 +478,25 @@ fn load_or_generate_host_key(
     let encoded = key
         .to_openssh(russh_keys::ssh_key::LineEnding::LF)
         .map_err(|e| anyhow::anyhow!("failed to encode host key: {}", e))?;
-    std::fs::write(&key_path, encoded.as_bytes())?;
-
-    // Set restrictive permissions on Unix
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))?;
-    }
+    write_private_file(&key_path, encoded.as_bytes())?;
 
     Ok(key)
+}
+
+/// Create `path` holding `data`, readable only by its owner from the start
+/// (never briefly world-readable), refusing to replace an existing file.
+fn write_private_file(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(data)?;
+    file.sync_all()
 }
 
 #[cfg(test)]
@@ -427,14 +506,14 @@ mod tests {
     #[test]
     fn test_parse_git_command_upload_pack() {
         let (service, path) = parse_git_command("git-upload-pack '/alice/myrepo.git'").unwrap();
-        assert_eq!(service, "upload-pack");
+        assert_eq!(service, GitService::UploadPack);
         assert_eq!(path, "/alice/myrepo.git");
     }
 
     #[test]
     fn test_parse_git_command_receive_pack() {
         let (service, path) = parse_git_command("git-receive-pack '/alice/myrepo.git'").unwrap();
-        assert_eq!(service, "receive-pack");
+        assert_eq!(service, GitService::ReceivePack);
         assert_eq!(path, "/alice/myrepo.git");
     }
 
@@ -442,6 +521,7 @@ mod tests {
     fn test_parse_git_command_invalid() {
         assert!(parse_git_command("ls -la").is_none());
         assert!(parse_git_command("git-evil '/foo'").is_none());
+        assert!(parse_git_command("git-upload-archive '/alice/myrepo.git'").is_none());
         assert!(parse_git_command("").is_none());
     }
 
@@ -471,5 +551,29 @@ mod tests {
         assert!(parse_repo_path("myrepo.git").is_none());
         assert!(parse_repo_path("/").is_none());
         assert!(parse_repo_path("").is_none());
+    }
+
+    #[test]
+    fn test_git_protocol_values() {
+        assert!(is_valid_git_protocol("version=2"));
+        assert!(is_valid_git_protocol("version=2:object-format=sha256"));
+        assert!(!is_valid_git_protocol(""));
+        assert!(!is_valid_git_protocol("version=2\nX=1"));
+        assert!(!is_valid_git_protocol(&"v".repeat(200)));
+    }
+
+    #[test]
+    fn test_host_key_file_is_private_and_never_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("key");
+        write_private_file(&path, b"secret").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        assert!(write_private_file(&path, b"other").is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"secret");
     }
 }

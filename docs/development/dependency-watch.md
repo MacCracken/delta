@@ -2,27 +2,18 @@
 
 Tracking dependency advisories, upgrade blockers, and security items that require upstream fixes or design decisions before resolution.
 
-Last reviewed: 2026-03-10
+Last reviewed: 2026-10-05
 
 ## Active Advisories
 
-### RUSTSEC-2025-0140 — gix-date non-utf8 string
-
-- **Crate:** `gix-date` 0.10.7 (via `gix` 0.72)
-- **Severity:** Low
-- **Issue:** `TimeBuf::as_str` can create non-utf8 `&str`
-- **Fix:** Upgrade to `gix-date` >= 0.12.0 (requires `gix` bump)
-- **Status:** Waiting — `gix` 0.72 pins older `gix-date`. Monitor for `gix` release with updated `gix-date`.
-- **Tracking:** <https://rustsec.org/advisories/RUSTSEC-2025-0140>
-
 ### RUSTSEC-2023-0071 — rsa timing sidechannel (Marvin Attack)
 
-- **Crate:** `rsa` 0.9.10 (via `sqlx-mysql` 0.8.6)
+- **Crate:** `rsa` 0.10.0-rc (via `russh` 0.64 / `ssh-key` 0.7)
 - **Severity:** Medium (5.9)
-- **Issue:** Potential key recovery through timing sidechannels
-- **Impact:** None — Delta does not use MySQL. `rsa` is only pulled in by `sqlx-mysql` which is an unused transitive dependency.
-- **Fix:** No upstream fix available. Will resolve when sqlx drops rsa or rsa releases a fix.
-- **Status:** No action needed — not in active dependency tree for our targets.
+- **Issue:** Potential key recovery through timing sidechannels in RSA private-key operations
+- **Impact:** None in practice — the SSH server only *verifies* RSA client signatures (public-key operations) and its host key is Ed25519, so no RSA private-key operation ever runs. (`sqlx` 0.9 no longer pulls `rsa` into the active dependency tree.)
+- **Fix:** No upstream fix available.
+- **Status:** No action needed; re-check when `russh`/`ssh-key` move to a patched `rsa`.
 - **Tracking:** <https://rustsec.org/advisories/RUSTSEC-2023-0071>
 
 ## Pending Security Work
@@ -33,24 +24,22 @@ Items identified in security scan that require design decisions or larger implem
 
 Implemented BLAKE3 stream cipher encryption in `delta-core/src/crypto.rs`. Key derived from `auth.secrets_key` config.
 
-### Rate limiting on auth endpoints (Medium)
+### Token scope enforcement (Medium)
 
-- **Issue:** No rate limiting on `/api/v1/auth/login` and `/api/v1/auth/register`
-- **Required:** Choose rate limiting strategy (tower-governor, custom middleware)
-- **Phase:** 9 (Scale and Hardening) — roadmap item "Rate limiting and abuse prevention"
+- **Issue:** API tokens store scopes (validated at creation), but no
+  extractor or handler checks them: every token acts with its user's full
+  permissions, so a "read-only" token can push, delete repositories, etc.
+- **Required:** Enforce scopes in `AuthUser` (and the git/LFS/OCI
+  credential paths), mapping each route to the scope it needs.
+- **Phase:** Roadmap item "Enforce token scopes in AuthUser extractor".
 
-### Collaborator access control (Medium)
+### Streaming registry uploads (Low)
 
-- **File:** `crates/delta-api/src/routes/git.rs:186`
-- **Issue:** Push access only checks repo owner, no collaborator support
-- **Required:** Collaborator model, invitation system, permission levels
-- **Phase:** Needs design — cross-cutting feature
-
-### Webhook HTTPS enforcement (Low)
-
-- **Issue:** Webhooks accept HTTP URLs, only HTTPS should be allowed in production
-- **Required:** Config flag to control HTTP vs HTTPS-only webhook URLs
-- **Phase:** Could be done anytime, needs config option
+- **Issue:** OCI blob/manifest, ark and artifact uploads are buffered in
+  memory (up to the 100 MiB body limit per request), and abandoned OCI
+  upload sessions are never cleaned up.
+- **Required:** Stream uploads to a temporary file while hashing, and
+  expire stale upload sessions.
 
 ## CI/CD Notes
 
@@ -59,6 +48,24 @@ Implemented BLAKE3 stream cipher encryption in `delta-core/src/crypto.rs`. Key d
 - When all active advisories above are resolved, consider removing `continue-on-error` from `cargo audit` to enforce a clean audit gate.
 
 ## Resolved
+
+### 2026-10-05 — Auth rate limiting, collaborators, webhook HTTPS
+
+- Login/registration rate limits existed but never applied (the server had
+  no peer address); they are now keyed on the TCP peer, with
+  `X-Forwarded-For` honoured only behind a trusted proxy
+  (`server.trust_forwarded_for`).
+- Collaborator roles (read/write/admin) govern push and repository access.
+- `webhooks.https_only` restricts webhook URLs to HTTPS.
+
+### 2026-10-05 — reqwest 0.13 `rustls`
+
+- reqwest 0.13's `rustls` feature verifies against the system trust store,
+  so the runtime image installs `ca-certificates`.
+
+### 2026-10-05 — RUSTSEC-2025-0140 (gix-date non-utf8 string)
+
+- Resolved by upgrading `gix` 0.72 → 0.88, which depends on `gix-date` 0.17 (fixed in >= 0.12)
 
 ### 2026-03-10 — SSRF protection for webhooks
 

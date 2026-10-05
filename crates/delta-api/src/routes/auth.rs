@@ -48,20 +48,12 @@ async fn register(
 ) -> Result<(StatusCode, Json<AuthResponse>), (StatusCode, String)> {
     // Auth rate limit check
     if let Some(ref limiter) = state.auth_rate_limiter {
-        let ip = request
-            .headers()
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.split(',').next())
-            .map(|s| s.trim().to_string())
-            .or_else(|| {
-                request
-                    .extensions()
-                    .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-                    .map(|ci| ci.0.ip().to_string())
-            })
-            .unwrap_or_default();
-        if !ip.is_empty() && limiter.check(&ip).is_none() {
+        let ip = crate::middleware::client_ip(
+            request.headers(),
+            request.extensions(),
+            state.config.server.trust_forwarded_for,
+        );
+        if limiter.check(&ip).is_none() {
             return Err((
                 StatusCode::TOO_MANY_REQUESTS,
                 "too many registration attempts".into(),
@@ -127,6 +119,11 @@ async fn register(
     .await
     .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
 
+    // The first account on a fresh install becomes the site admin.
+    if let Err(e) = delta_core::db::user::ensure_bootstrap_admin(&state.db).await {
+        tracing::error!("admin bootstrap failed: {}", e);
+    }
+
     let (raw_token, token_hash) = auth::generate_token().map_err(|e| {
         tracing::error!("internal error: {}", e);
         (
@@ -191,20 +188,12 @@ async fn login(
 ) -> Result<Json<AuthResponse>, (StatusCode, String)> {
     // Auth rate limit check
     if let Some(ref limiter) = state.auth_rate_limiter {
-        let ip = request
-            .headers()
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.split(',').next())
-            .map(|s| s.trim().to_string())
-            .or_else(|| {
-                request
-                    .extensions()
-                    .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-                    .map(|ci| ci.0.ip().to_string())
-            })
-            .unwrap_or_default();
-        if !ip.is_empty() && limiter.check(&ip).is_none() {
+        let ip = crate::middleware::client_ip(
+            request.headers(),
+            request.extensions(),
+            state.config.server.trust_forwarded_for,
+        );
+        if limiter.check(&ip).is_none() {
             return Err((
                 StatusCode::TOO_MANY_REQUESTS,
                 "too many login attempts".into(),

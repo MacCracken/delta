@@ -203,14 +203,42 @@ pub async fn poll_job(
     runner_labels: &[String],
 ) -> Result<Option<QueuedJob>> {
     // Find a pending job whose required labels are a subset of the runner's labels.
-    // Jobs with empty labels match any runner.
-    let rows = sqlx::query_as::<_, QueuedJobRow>(
-        "SELECT * FROM runner_job_queue WHERE status = 'pending' ORDER BY created_at ASC LIMIT 20",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| DeltaError::Pipeline(e.to_string()))?;
+    // Jobs with empty labels match any runner. Page through the whole queue:
+    // looking only at the oldest few would let jobs no runner can take (e.g.
+    // an offline label) starve every other runner. Jobs of pipelines that
+    // are no longer active (e.g. cancelled) are never handed out.
+    const PAGE: i64 = 100;
+    let mut offset = 0;
+    loop {
+        let rows = sqlx::query_as::<_, QueuedJobRow>(
+            "SELECT q.* FROM runner_job_queue q
+             JOIN pipeline_runs p ON p.id = q.pipeline_id
+             WHERE q.status = 'pending' AND p.status IN ('queued', 'running')
+             ORDER BY q.created_at ASC, q.id ASC LIMIT ? OFFSET ?",
+        )
+        .bind(PAGE)
+        .bind(offset)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| DeltaError::Pipeline(e.to_string()))?;
+        let exhausted = (rows.len() as i64) < PAGE;
+        offset += PAGE;
+        if let Some(job) = claim_first_matching(pool, runner_id, runner_labels, rows).await? {
+            return Ok(Some(job));
+        }
+        if exhausted {
+            return Ok(None);
+        }
+    }
+}
 
+/// Claim the first job in `rows` whose labels the runner has.
+async fn claim_first_matching(
+    pool: &SqlitePool,
+    runner_id: &str,
+    runner_labels: &[String],
+    rows: Vec<QueuedJobRow>,
+) -> Result<Option<QueuedJob>> {
     for row in rows {
         let job_labels: Vec<String> = row
             .labels
@@ -299,18 +327,48 @@ pub async fn complete_queued_job(pool: &SqlitePool, queue_id: &str, runner_id: &
     Ok(())
 }
 
+/// Cancel a pipeline's queued remote jobs (pending or claimed) and its
+/// unfinished job runs, so runners don't pick them up or report them later.
+pub async fn cancel_pipeline_jobs(pool: &SqlitePool, pipeline_id: &str) -> Result<u64> {
+    let storage = |e: sqlx::Error| DeltaError::Pipeline(e.to_string());
+    let mut tx = pool.begin().await.map_err(storage)?;
+    let cancelled = sqlx::query(
+        "UPDATE runner_job_queue SET status = 'cancelled'
+         WHERE pipeline_id = ? AND status IN ('pending', 'claimed')",
+    )
+    .bind(pipeline_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(storage)?
+    .rows_affected();
+    sqlx::query(
+        "UPDATE job_runs SET status = 'cancelled', finished_at = ?
+         WHERE pipeline_id = ? AND status IN ('queued', 'running')",
+    )
+    .bind(Utc::now().to_rfc3339())
+    .bind(pipeline_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(storage)?;
+    tx.commit().await.map_err(storage)?;
+    Ok(cancelled)
+}
+
 /// Reclaim jobs stuck in 'claimed' status where the runner's heartbeat
-/// is older than `stale_minutes` minutes ago. Resets them to 'pending'.
+/// is older than `stale_minutes` minutes ago, or whose runner was deleted
+/// (`claimed_by` is set to NULL by the foreign key). Resets them to 'pending'.
 /// Returns the count of reclaimed jobs.
 pub async fn reclaim_stale_jobs(pool: &SqlitePool, stale_minutes: i64) -> Result<u64> {
+    // Heartbeats are stored as RFC3339; normalize with datetime() before
+    // comparing so the text comparison is chronological.
     let result = sqlx::query(
         "UPDATE runner_job_queue SET status = 'pending', claimed_by = NULL
          WHERE status = 'claimed'
-         AND claimed_by IN (
+         AND (claimed_by IS NULL OR claimed_by IN (
              SELECT id FROM runners
-             WHERE last_heartbeat_at < datetime('now', '-' || ? || ' minutes')
-                OR last_heartbeat_at IS NULL
-         )",
+             WHERE last_heartbeat_at IS NULL
+                OR datetime(last_heartbeat_at) < datetime('now', '-' || ? || ' minutes')
+         ))",
     )
     .bind(stale_minutes)
     .execute(pool)

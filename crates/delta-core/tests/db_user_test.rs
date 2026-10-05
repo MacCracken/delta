@@ -20,6 +20,16 @@ async fn test_create_and_get_user() {
 }
 
 #[tokio::test]
+async fn test_usernames_are_unique_ignoring_case() {
+    let pool = common::setup_pool().await;
+    common::create_test_user(&pool).await; // "testuser"
+    let err = db::user::create(&pool, "TestUser", "other@example.com", "pw", false)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, delta_core::DeltaError::Conflict(_)), "{err}");
+}
+
+#[tokio::test]
 async fn test_get_user_by_username() {
     let pool = common::setup_pool().await;
     common::create_test_user(&pool).await;
@@ -193,6 +203,39 @@ async fn test_ssh_key_delete_wrong_user() {
 }
 
 #[tokio::test]
+async fn test_ssh_key_fingerprints_are_unique() {
+    let pool = common::setup_pool().await;
+    let alice = common::create_test_user(&pool).await;
+    let mallory = common::create_second_user(&pool).await;
+    db::ssh_key::add(
+        &pool,
+        &alice.id.to_string(),
+        "laptop",
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKey alice@laptop",
+        "SHA256:samekey",
+    )
+    .await
+    .unwrap();
+
+    // The same key with another comment: one key must map to one account.
+    let err = db::ssh_key::add(
+        &pool,
+        &mallory.id.to_string(),
+        "copied",
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKey mallory",
+        "SHA256:samekey",
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, delta_core::DeltaError::Conflict(_)), "{err}");
+    let (owner, _) = db::ssh_key::get_user_by_fingerprint(&pool, "SHA256:samekey")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(owner, alice.id.to_string());
+}
+
+#[tokio::test]
 async fn test_ssh_key_fingerprint_not_found() {
     let pool = common::setup_pool().await;
 
@@ -200,4 +243,53 @@ async fn test_ssh_key_fingerprint_not_found() {
         .await
         .unwrap();
     assert!(result.is_none());
+}
+
+#[tokio::test]
+async fn test_token_expiry_is_enforced_to_the_second() {
+    let pool = common::setup_pool().await;
+    let user = common::create_test_user(&pool).await;
+    let user_id = user.id.to_string();
+
+    // RFC3339, as written by the API. An hour in the past must be rejected
+    // even though the date part matches today.
+    let expired = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+    db::user::create_token(&pool, &user_id, "old", "hash-expired", "*", Some(&expired))
+        .await
+        .unwrap();
+    assert!(
+        db::user::get_by_token_hash(&pool, "hash-expired")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let valid = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    db::user::create_token(&pool, &user_id, "new", "hash-valid", "*", Some(&valid))
+        .await
+        .unwrap();
+    assert!(
+        db::user::get_by_token_hash(&pool, "hash-valid")
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn test_bootstrap_admin_promotes_only_first_user() {
+    let pool = common::setup_pool().await;
+    let first = common::create_test_user(&pool).await;
+    db::user::ensure_bootstrap_admin(&pool).await.unwrap();
+    let second = common::create_second_user(&pool).await;
+    db::user::ensure_bootstrap_admin(&pool).await.unwrap();
+
+    let first = db::user::get_by_id(&pool, &first.id.to_string())
+        .await
+        .unwrap();
+    let second = db::user::get_by_id(&pool, &second.id.to_string())
+        .await
+        .unwrap();
+    assert!(first.is_admin);
+    assert!(!second.is_admin);
 }

@@ -5,120 +5,161 @@ use std::path::Path;
 use std::process::Stdio;
 use tokio::process::Command;
 
+use crate::browse::MAX_DIFF_BYTES;
+use crate::process::output_capped;
 use crate::validate::validate_ref;
 
+/// Most output kept from a log or numstat listing.
+const MAX_LISTING_BYTES: usize = 32 * 1024 * 1024;
+
 /// Generate a unified diff between two refs (branches, commits, tags).
+/// Diffs over [`MAX_DIFF_BYTES`] are refused with [`DeltaError::TooLarge`].
 pub async fn diff_refs(repo_path: &Path, base: &str, head: &str) -> Result<String> {
     validate_ref(base)?;
     validate_ref(head)?;
-    let output = Command::new("git")
-        .args(["diff", &format!("{}...{}", base, head)])
-        .current_dir(repo_path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| DeltaError::Storage(format!("failed to run git diff: {}", e)))?;
-
+    let output = output_capped(
+        Command::new("git")
+            .args([
+                "-c",
+                "core.quotePath=false",
+                "diff",
+                &format!("{}...{}", base, head),
+            ])
+            .current_dir(repo_path),
+        MAX_DIFF_BYTES,
+    )
+    .await?;
+    if output.truncated {
+        return Err(DeltaError::TooLarge(format!(
+            "diff is larger than {MAX_DIFF_BYTES} bytes"
+        )));
+    }
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::error!("git diff failed: {}", stderr);
+        tracing::error!("git diff failed: {}", output.stderr);
         return Err(DeltaError::Storage("git diff failed".into()));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// Get a stat summary (files changed, insertions, deletions).
 pub async fn diff_stat(repo_path: &Path, base: &str, head: &str) -> Result<DiffStat> {
     validate_ref(base)?;
     validate_ref(head)?;
-    let output = Command::new("git")
-        .args([
-            "diff",
-            "--stat",
-            "--numstat",
-            &format!("{}...{}", base, head),
-        ])
-        .current_dir(repo_path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| DeltaError::Storage(format!("failed to run git diff: {}", e)))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::error!("git diff --stat failed: {}", stderr);
-        return Err(DeltaError::Storage("git diff --stat failed".into()));
+    let output = output_capped(
+        Command::new("git")
+            .args(["diff", "--numstat", "-z", &format!("{}...{}", base, head)])
+            .current_dir(repo_path),
+        MAX_LISTING_BYTES,
+    )
+    .await?;
+    if !output.status.success() && !output.truncated {
+        tracing::error!("git diff --numstat failed: {}", output.stderr);
+        return Err(DeltaError::Storage("git diff --numstat failed".into()));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut files = Vec::new();
-    let mut total_additions = 0i64;
-    let mut total_deletions = 0i64;
-
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 3 {
-            let additions = parts[0].parse::<i64>().unwrap_or(0);
-            let deletions = parts[1].parse::<i64>().unwrap_or(0);
-            let file = parts[2].to_string();
-            total_additions += additions;
-            total_deletions += deletions;
-            files.push(FileStat {
-                path: file,
-                additions,
-                deletions,
-            });
-        }
-    }
-
+    let files: Vec<FileStat> = parse_numstat_z(&output.stdout)
+        .into_iter()
+        .map(|(additions, deletions, path)| FileStat {
+            path,
+            additions,
+            deletions,
+        })
+        .collect();
     Ok(DiffStat {
         files_changed: files.len(),
-        additions: total_additions,
-        deletions: total_deletions,
+        additions: files.iter().map(|f| f.additions).sum(),
+        deletions: files.iter().map(|f| f.deletions).sum(),
         files,
     })
+}
+
+/// Parse `git diff --numstat -z` output into `(additions, deletions, path)`:
+/// records are `<added>\t<deleted>\t<path>\0`, or for a rename
+/// `<added>\t<deleted>\t\0<old path>\0<new path>\0`. Binary files (`-`)
+/// count as zero lines; a record cut off by an output cap is dropped.
+pub(crate) fn parse_numstat_z(output: &[u8]) -> Vec<(i64, i64, String)> {
+    let complete = match output.iter().rposition(|&b| b == 0) {
+        Some(end) => &output[..=end],
+        None => return Vec::new(),
+    };
+    let mut fields = complete.split(|&b| b == 0);
+    let mut stats = Vec::new();
+    while let Some(record) = fields.next() {
+        if record.is_empty() {
+            continue;
+        }
+        let record = String::from_utf8_lossy(record);
+        let mut parts = record.splitn(3, '\t');
+        let (Some(additions), Some(deletions), Some(path)) =
+            (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        let path = if path.is_empty() {
+            // A rename: the old and new paths follow as separate fields.
+            match (fields.next(), fields.next()) {
+                (Some(_old), Some(new)) if !new.is_empty() => {
+                    String::from_utf8_lossy(new).into_owned()
+                }
+                _ => break,
+            }
+        } else {
+            path.to_string()
+        };
+        stats.push((
+            additions.parse().unwrap_or(0),
+            deletions.parse().unwrap_or(0),
+            path,
+        ));
+    }
+    stats
 }
 
 /// List commits between base and head.
 pub async fn list_commits(repo_path: &Path, base: &str, head: &str) -> Result<Vec<CommitInfo>> {
     validate_ref(base)?;
     validate_ref(head)?;
-    let output = Command::new("git")
-        .args([
-            "log",
-            "--format=%H%n%an%n%ae%n%s%n%aI%n---",
-            &format!("{}..{}", base, head),
-        ])
-        .current_dir(repo_path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| DeltaError::Storage(format!("failed to run git log: {}", e)))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::error!("git log failed: {}", stderr);
+    // NUL-terminated fields, as in `browse::log`: commit text can't forge
+    // or corrupt entries.
+    let output = output_capped(
+        Command::new("git")
+            .args([
+                "log",
+                "-z",
+                "--format=%H%x00%an%x00%ae%x00%s%x00%aI",
+                &format!("{}..{}", base, head),
+            ])
+            .current_dir(repo_path),
+        MAX_LISTING_BYTES,
+    )
+    .await?;
+    if !output.status.success() && !output.truncated {
+        tracing::error!("git log failed: {}", output.stderr);
         return Err(DeltaError::Storage("git log failed".into()));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let complete = match output.stdout.iter().rposition(|&b| b == 0) {
+        Some(end) => &output.stdout[..end],
+        None => &[][..],
+    };
+    let fields: Vec<String> = complete
+        .split(|&b| b == 0)
+        .map(|f| String::from_utf8_lossy(f).into_owned())
+        .collect();
     let mut commits = Vec::new();
-
-    for chunk in stdout.split("---\n") {
-        let lines: Vec<&str> = chunk.trim().lines().collect();
-        if lines.len() >= 5 {
-            commits.push(CommitInfo {
-                sha: lines[0].to_string(),
-                author_name: lines[1].to_string(),
-                author_email: lines[2].to_string(),
-                message: lines[3].to_string(),
-                date: lines[4].to_string(),
-            });
+    for [sha, author_name, author_email, message, date] in fields.as_chunks::<5>().0 {
+        if !matches!(sha.len(), 40 | 64) || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+            tracing::error!("unexpected git log output");
+            break;
         }
+        commits.push(CommitInfo {
+            sha: sha.clone(),
+            author_name: author_name.clone(),
+            author_email: author_email.clone(),
+            message: message.clone(),
+            date: date.clone(),
+        });
     }
 
     Ok(commits)

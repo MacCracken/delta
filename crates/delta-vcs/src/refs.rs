@@ -89,3 +89,33 @@ pub fn head_commit(repo_path: &Path) -> Result<Option<String>> {
         Err(_) => Ok(None), // Empty repo, no commits yet
     }
 }
+
+/// Object id a fully-qualified ref (e.g. `refs/heads/main`) points to, or
+/// `None` if the ref doesn't exist or is symbolic.
+pub fn ref_target(repo_path: &Path, refname: &str) -> Option<String> {
+    let repo = gix::open(repo_path).ok()?;
+    let reference = repo.try_find_reference(refname).ok()??;
+    Some(reference.try_id()?.to_hex().to_string())
+}
+
+/// The full id of the commit `rev` (a commit id, branch or tag) names, if
+/// it names one in this repository.
+pub async fn resolve_commit(repo_path: &Path, rev: &str) -> Option<String> {
+    crate::validate::validate_ref(rev).ok()?;
+    let output = tokio::process::Command::new("git")
+        .args([
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{rev}^{{commit}}"),
+        ])
+        .current_dir(repo_path)
+        .output()
+        .await
+        .ok()?;
+    let sha = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    (output.status.success()
+        && matches!(sha.len(), 40 | 64)
+        && sha.bytes().all(|b| b.is_ascii_hexdigit()))
+    .then_some(sha)
+}

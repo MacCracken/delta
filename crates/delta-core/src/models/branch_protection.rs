@@ -22,15 +22,32 @@ pub struct BranchProtection {
 
 impl BranchProtection {
     /// Check if a branch name matches this protection rule.
+    ///
+    /// Patterns are globs: `*` matches any run of characters (including `/`,
+    /// so `release/*` also covers `release/1/hotfix`) and `?` matches one
+    /// character. Everything else matches literally.
     pub fn matches(&self, branch: &str) -> bool {
-        if self.pattern == branch {
-            return true;
-        }
-        // Simple glob: "release/*" matches "release/2026.1.1"
-        if let Some(prefix) = self.pattern.strip_suffix("/*") {
-            return branch.starts_with(&format!("{}/", prefix));
-        }
-        false
+        glob_match(self.pattern.as_bytes(), branch.as_bytes())
+    }
+
+    /// Combine every rule matching `branch` into one, taking the most
+    /// restrictive value of each setting. Returns `None` if none match.
+    pub fn effective<'a>(
+        rules: impl IntoIterator<Item = &'a BranchProtection>,
+        branch: &str,
+    ) -> Option<BranchProtection> {
+        rules
+            .into_iter()
+            .filter(|r| r.matches(branch))
+            .cloned()
+            .reduce(|mut acc, r| {
+                acc.require_pr |= r.require_pr;
+                acc.required_approvals = acc.required_approvals.max(r.required_approvals);
+                acc.require_status_checks |= r.require_status_checks;
+                acc.prevent_force_push |= r.prevent_force_push;
+                acc.prevent_deletion |= r.prevent_deletion;
+                acc
+            })
     }
 
     /// Check if a push to this branch should be rejected.
@@ -42,6 +59,35 @@ impl BranchProtection {
     pub fn allows_force_push(&self) -> bool {
         !self.prevent_force_push
     }
+}
+
+/// Glob match supporting `*` (any run of bytes) and `?` (any single byte).
+fn glob_match(pattern: &[u8], text: &[u8]) -> bool {
+    let (mut p, mut t) = (0, 0);
+    // Position of the last `*` in the pattern and the text index it matched up to.
+    let mut star: Option<(usize, usize)> = None;
+    while t < text.len() {
+        match pattern.get(p) {
+            Some(b'*') => {
+                star = Some((p, t));
+                p += 1;
+            }
+            Some(&c) if c == b'?' || c == text[t] => {
+                p += 1;
+                t += 1;
+            }
+            _ => match star {
+                // Let the last `*` absorb one more byte and retry.
+                Some((sp, st)) => {
+                    p = sp + 1;
+                    t = st + 1;
+                    star = Some((sp, st + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    pattern[p..].iter().all(|&c| c == b'*')
 }
 
 #[cfg(test)]
@@ -75,6 +121,39 @@ mod tests {
         assert!(rule.matches("release/beta"));
         assert!(!rule.matches("main"));
         assert!(!rule.matches("release"));
+    }
+
+    #[test]
+    fn test_wildcard_patterns() {
+        assert!(make_rule("*", false, false).matches("anything/at/all"));
+        let feature = make_rule("feature-*", false, false);
+        assert!(feature.matches("feature-login"));
+        assert!(!feature.matches("bugfix-login"));
+        assert!(make_rule("release/*", false, false).matches("release/1/hotfix"));
+        assert!(make_rule("v?.x", false, false).matches("v2.x"));
+        assert!(!make_rule("v?.x", false, false).matches("v10.x"));
+        assert!(make_rule("*-stable", false, false).matches("2026-stable"));
+    }
+
+    #[test]
+    fn test_effective_combines_most_restrictive() {
+        let mut loose = make_rule("release/*", false, false);
+        loose.required_approvals = 0;
+        loose.prevent_deletion = false;
+        let mut strict = make_rule("release/v1", true, true);
+        strict.required_approvals = 2;
+
+        // Rule order must not matter.
+        for rules in [vec![&loose, &strict], vec![&strict, &loose]] {
+            let rule = BranchProtection::effective(rules, "release/v1").unwrap();
+            assert!(rule.require_pr);
+            assert!(rule.prevent_force_push);
+            assert!(rule.prevent_deletion);
+            assert_eq!(rule.required_approvals, 2);
+        }
+        let other = BranchProtection::effective([&loose, &strict], "release/v2").unwrap();
+        assert!(!other.require_pr);
+        assert!(BranchProtection::effective([&loose, &strict], "main").is_none());
     }
 
     #[test]

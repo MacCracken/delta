@@ -991,3 +991,43 @@ async fn test_ark_package_get_latest() {
     let result = db::ark_package::get_latest(&pool, "nonexistent", None).await;
     assert!(result.is_err());
 }
+
+#[tokio::test]
+async fn test_signing_key_used_for_signatures_can_be_revoked() {
+    let pool = common::setup_pool().await;
+    let user = common::create_test_user(&pool).await;
+    let uid = user.id.to_string();
+    let repo = common::create_test_repo(&pool, &uid).await;
+    let artifact = db::artifact::create(
+        &pool,
+        &db::artifact::CreateArtifactParams {
+            repo_id: &repo.id.to_string(),
+            pipeline_id: None,
+            name: "build.tar.gz",
+            version: None,
+            artifact_type: "generic",
+            content_hash: "abc123",
+            size_bytes: 1,
+            metadata: None,
+        },
+    )
+    .await
+    .unwrap();
+    let key = db::signing::add_signing_key(&pool, &uid, "leaked", &"ab".repeat(32))
+        .await
+        .unwrap();
+    db::signing::add_signature(&pool, &artifact.id, &key.id, &"cd".repeat(64))
+        .await
+        .unwrap();
+
+    // Previously failed with a foreign key violation (reported as 404).
+    db::signing::delete_signing_key(&pool, &key.id, &uid)
+        .await
+        .expect("revoking a used key must succeed");
+    assert!(
+        db::signing::get_signatures(&pool, &artifact.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

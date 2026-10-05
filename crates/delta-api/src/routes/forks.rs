@@ -91,11 +91,14 @@ async fn create_fork(
         ));
     }
 
-    let visibility = match req.visibility.as_str() {
+    let requested = match req.visibility.as_str() {
         "public" => Visibility::Public,
         "internal" => Visibility::Internal,
         _ => Visibility::Private,
     };
+    // A fork can't be more visible than its source: forking a private
+    // repository must not publish its contents.
+    let visibility = least_visible(requested, source_repo.visibility);
 
     // Create fork record in DB
     let fork = db::repo::create_fork(
@@ -142,6 +145,15 @@ async fn create_fork(
         StatusCode::CREATED,
         Json(ForkResponse::from_repo(fork, &user.username)),
     ))
+}
+
+fn least_visible(a: Visibility, b: Visibility) -> Visibility {
+    let rank = |v| match v {
+        Visibility::Private => 0,
+        Visibility::Internal => 1,
+        Visibility::Public => 2,
+    };
+    if rank(a) <= rank(b) { a } else { b }
 }
 
 async fn list_forks(

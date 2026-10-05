@@ -31,7 +31,7 @@ impl LfsStore {
             std::fs::create_dir_all(parent)?;
         }
 
-        std::fs::write(&path, data)?;
+        crate::store::write_atomically(&path, data)?;
         Ok(hash)
     }
 
@@ -54,7 +54,7 @@ impl LfsStore {
             std::fs::create_dir_all(parent)?;
         }
 
-        std::fs::write(&path, data)?;
+        crate::store::write_atomically(&path, data)?;
         Ok(())
     }
 
@@ -99,7 +99,7 @@ impl LfsStore {
 fn hex_sha256(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 /// Validate that an OID looks like a valid SHA-256 hex string.

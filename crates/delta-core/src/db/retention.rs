@@ -99,7 +99,7 @@ pub async fn find_expired_artifacts(
 ) -> Result<Vec<super::artifact::Artifact>> {
     let cutoff = format!("-{} days", max_age_days);
     let rows = sqlx::query_as::<_, super::artifact::ArtifactRowPub>(
-        "SELECT * FROM artifacts WHERE repo_id = ? AND created_at < datetime('now', ?) ORDER BY created_at ASC",
+        "SELECT * FROM artifacts WHERE repo_id = ? AND datetime(created_at) < datetime('now', ?) ORDER BY created_at ASC",
     )
     .bind(repo_id)
     .bind(&cutoff)

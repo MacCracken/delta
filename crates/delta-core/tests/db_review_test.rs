@@ -249,6 +249,7 @@ async fn test_pr_reviews() {
         &f.reviewer_id,
         ReviewState::ChangesRequested,
         Some("Please fix the tests"),
+        Some("abc123"),
     )
     .await
     .unwrap();
@@ -259,9 +260,16 @@ async fn test_pr_reviews() {
         .unwrap();
     assert_eq!(reviews.len(), 1);
 
-    db::pull_request::submit_review(&f.pool, &pr_id, &f.reviewer_id, ReviewState::Approved, None)
-        .await
-        .unwrap();
+    db::pull_request::submit_review(
+        &f.pool,
+        &pr_id,
+        &f.reviewer_id,
+        ReviewState::Approved,
+        None,
+        Some("abc123"),
+    )
+    .await
+    .unwrap();
 
     let reviews = db::pull_request::list_reviews(&f.pool, &pr_id)
         .await
@@ -274,20 +282,65 @@ async fn test_count_approvals() {
     let f = setup_fixture().await;
     let pr = create_test_pr(&f).await;
     let pr_id = pr.id.to_string();
+    let approve = |reviewer: String, sha: &'static str| {
+        let pool = f.pool.clone();
+        let pr_id = pr_id.clone();
+        async move {
+            db::pull_request::submit_review(
+                &pool,
+                &pr_id,
+                &reviewer,
+                ReviewState::Approved,
+                None,
+                Some(sha),
+            )
+            .await
+            .unwrap();
+        }
+    };
+    let count = |sha: &'static str| {
+        let pool = f.pool.clone();
+        let pr_id = pr_id.clone();
+        async move {
+            db::pull_request::count_approvals(&pool, &pr_id, sha)
+                .await
+                .unwrap()
+        }
+    };
 
-    let count = db::pull_request::count_approvals(&f.pool, &pr_id)
+    assert_eq!(count("abc123").await, 0);
+
+    // Approvals from users without write access don't count.
+    approve(f.reviewer_id.clone(), "abc123").await;
+    assert_eq!(count("abc123").await, 0);
+
+    db::collaborator::set(
+        &f.pool,
+        &f.repo_id,
+        &f.reviewer_id,
+        delta_core::models::collaborator::CollaboratorRole::Write,
+    )
+    .await
+    .unwrap();
+    assert_eq!(count("abc123").await, 1);
+
+    // Approvals of an older head don't count for a new one.
+    assert_eq!(count("def456").await, 0);
+
+    // Read-only collaborators don't count either.
+    let reader = db::user::create(&f.pool, "carol", "carol@example.com", "pw", false)
         .await
         .unwrap();
-    assert_eq!(count, 0);
-
-    db::pull_request::submit_review(&f.pool, &pr_id, &f.reviewer_id, ReviewState::Approved, None)
-        .await
-        .unwrap();
-
-    let count = db::pull_request::count_approvals(&f.pool, &pr_id)
-        .await
-        .unwrap();
-    assert_eq!(count, 1);
+    db::collaborator::set(
+        &f.pool,
+        &f.repo_id,
+        &reader.id.to_string(),
+        delta_core::models::collaborator::CollaboratorRole::Read,
+    )
+    .await
+    .unwrap();
+    approve(reader.id.to_string(), "abc123").await;
+    assert_eq!(count("abc123").await, 1);
 }
 
 // --- Status Checks ---
@@ -356,13 +409,13 @@ async fn test_status_checks() {
 }
 
 #[tokio::test]
-async fn test_no_checks_means_passed() {
+async fn test_no_checks_means_not_passed() {
     let f = setup_fixture().await;
 
     let passed = db::status_check::all_passed(&f.pool, &f.repo_id, "nonexistent")
         .await
         .unwrap();
-    assert!(passed);
+    assert!(!passed);
 }
 
 #[tokio::test]
@@ -415,8 +468,9 @@ async fn test_status_check_all_passed() {
     let repo_id = repo.id.to_string();
     let sha = "commit123";
 
+    // No checks reported yet: not passed.
     assert!(
-        db::status_check::all_passed(&pool, &repo_id, sha)
+        !db::status_check::all_passed(&pool, &repo_id, sha)
             .await
             .unwrap()
     );

@@ -58,7 +58,7 @@ async fn add_instance(
     }
 
     // SSRF protection: reject private/internal URLs
-    if crate::routes::git::is_private_url(&req.url) {
+    if crate::ssrf::is_private_url(&req.url) {
         return Err((
             StatusCode::BAD_REQUEST,
             "federation instance URL must not target a private network".into(),
@@ -187,25 +187,17 @@ async fn list_remote_repos(
     // Update last_seen timestamp
     let _ = db::federation::update_last_seen(&state.db, &instance_id).await;
 
+    // SSRF protection: vet the instance URL at fetch time (it may resolve
+    // differently than when it was registered) and pin the connection.
     let timeout = std::time::Duration::from_secs(state.config.federation.timeout_secs);
-    let client = reqwest::Client::builder()
-        .timeout(timeout)
-        .build()
+    let client = crate::ssrf::guarded_client(&instance.url, timeout)
+        .await
         .map_err(|e| {
-            tracing::error!("failed to build HTTP client: {}", e);
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal server error".into(),
+                StatusCode::BAD_REQUEST,
+                format!("federation instance URL rejected: {e}"),
             )
         })?;
-
-    // SSRF protection: re-check instance URL at fetch time
-    if crate::routes::git::is_private_url(&instance.url) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "federation instance URL targets a private network".into(),
-        ));
-    }
 
     let url = format!("{}/api/v1/repos", instance.url.trim_end_matches('/'));
     let resp = client.get(&url).send().await.map_err(|e| {
@@ -216,7 +208,8 @@ async fn list_remote_repos(
         )
     })?;
 
-    let body: serde_json::Value = resp.json().await.map_err(|e| {
+    let body = crate::ssrf::read_capped(resp, 4 * 1024 * 1024).await;
+    let body: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
         tracing::error!("failed to parse remote repos response: {}", e);
         (
             StatusCode::BAD_GATEWAY,
@@ -279,16 +272,20 @@ async fn create_mirror(
         req.name
     );
 
-    // SSRF protection: check the constructed remote URL
-    if crate::routes::git::is_private_url(&remote_url) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "mirror URL targets a private network".into(),
-        ));
+    // SSRF protection: the remote URL must resolve only to public addresses
+    if let Err(e) = crate::ssrf::resolve_public(&remote_url).await {
+        return Err((StatusCode::BAD_REQUEST, format!("mirror URL rejected: {e}")));
     }
 
     let local_name = req.local_name.as_deref().unwrap_or(&req.name);
     let user_id = user.id.to_string();
+
+    // The mirror lives where every other component looks for the user's
+    // repositories (by username); this also validates `local_name`.
+    let repo_path = state
+        .repo_host
+        .repo_path(&user.username, local_name)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 
     // Create the mirror record in DB
     let repo = db::repo::create_mirror(
@@ -314,17 +311,12 @@ async fn create_mirror(
         }
     })?;
 
-    // Clone the remote repo as a bare mirror
-    let repo_path = state
-        .config
-        .storage
-        .repos_dir
-        .join(&user_id)
-        .join(format!("{}.git", local_name));
-
+    // Clone the remote repo as a bare mirror. No redirects (each hop would need vetting) and HTTP(S) transports only.
     let output = tokio::process::Command::new("git")
-        .args(["clone", "--mirror", &remote_url])
+        .args(["-c", "http.followRedirects=false"])
+        .args(["clone", "--mirror", "--", &remote_url])
         .arg(&repo_path)
+        .env("GIT_ALLOW_PROTOCOL", "http:https")
         .output()
         .await
         .map_err(|e| {

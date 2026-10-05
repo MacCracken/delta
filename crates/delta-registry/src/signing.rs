@@ -7,6 +7,9 @@ use serde::Serialize;
 pub struct VerificationResult {
     pub key_id: String,
     pub key_name: String,
+    /// Username of the key's owner. Key names are free-form labels chosen by
+    /// whoever registered the key; this is who actually vouches.
+    pub signer: Option<String>,
     pub valid: bool,
 }
 

@@ -15,9 +15,14 @@ pub async fn create(
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
 
-    sqlx::query(
+    // Usernames are unique regardless of case: "Alice" next to "alice" is
+    // an impersonation risk, and both would share one directory on
+    // case-insensitive filesystems. Checked in the INSERT itself so
+    // concurrent registrations can't race past it.
+    let inserted = sqlx::query(
         "INSERT INTO users (id, username, email, password_hash, is_agent, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+         SELECT ?, ?, ?, ?, ?, ?, ?
+         WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = ? COLLATE NOCASE)",
     )
     .bind(&id)
     .bind(username)
@@ -26,6 +31,7 @@ pub async fn create(
     .bind(is_agent)
     .bind(&now)
     .bind(&now)
+    .bind(username)
     .execute(pool)
     .await
     .map_err(|e| {
@@ -35,6 +41,12 @@ pub async fn create(
             DeltaError::Storage(e.to_string())
         }
     })?;
+    if inserted.rows_affected() == 0 {
+        return Err(DeltaError::Conflict(format!(
+            "user '{}' already exists",
+            username
+        )));
+    }
 
     get_by_id(pool, &id).await
 }
@@ -113,7 +125,7 @@ pub async fn get_by_token_hash(pool: &SqlitePool, token_hash: &str) -> Result<Op
         "SELECT u.* FROM users u
          JOIN api_tokens t ON u.id = t.user_id
          WHERE t.token_hash = ?
-         AND (t.expires_at IS NULL OR t.expires_at > datetime('now'))",
+         AND (t.expires_at IS NULL OR datetime(t.expires_at) > datetime('now'))",
     )
     .bind(token_hash)
     .fetch_optional(pool)
@@ -122,12 +134,11 @@ pub async fn get_by_token_hash(pool: &SqlitePool, token_hash: &str) -> Result<Op
 
     if let Some(row) = row {
         // Update last_used_at
-        let _ = sqlx::query(
-            "UPDATE api_tokens SET last_used_at = datetime('now') WHERE token_hash = ?",
-        )
-        .bind(token_hash)
-        .execute(pool)
-        .await;
+        let _ = sqlx::query("UPDATE api_tokens SET last_used_at = ? WHERE token_hash = ?")
+            .bind(Utc::now().to_rfc3339())
+            .bind(token_hash)
+            .execute(pool)
+            .await;
 
         Ok(Some(row.into_user()))
     } else {
@@ -191,6 +202,23 @@ pub async fn delete_token(pool: &SqlitePool, token_id: &str, user_id: &str) -> R
     if result.rows_affected() == 0 {
         return Err(DeltaError::AuthFailed("token not found".into()));
     }
+    Ok(())
+}
+
+/// Promote the earliest registered user to site admin if there is no admin yet.
+///
+/// Called after registration so the first account on a fresh install can
+/// administer it. A single statement, so concurrent registrations cannot
+/// produce two bootstrap admins.
+pub async fn ensure_bootstrap_admin(pool: &SqlitePool) -> Result<()> {
+    sqlx::query(
+        "UPDATE users SET is_admin = TRUE
+         WHERE id = (SELECT id FROM users ORDER BY created_at ASC, rowid ASC LIMIT 1)
+           AND NOT EXISTS (SELECT 1 FROM users WHERE is_admin = TRUE)",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| DeltaError::Storage(e.to_string()))?;
     Ok(())
 }
 

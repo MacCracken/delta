@@ -34,6 +34,16 @@ pub struct ServerConfig {
     /// Allowed CORS origins. Empty list means allow any origin (dev only).
     #[serde(default)]
     pub cors_origins: Vec<String>,
+    /// Identify clients by the right-most `X-Forwarded-For` entry instead of
+    /// the TCP peer address. Enable only behind a reverse proxy that sets
+    /// the header; otherwise clients can choose their own rate-limit key.
+    #[serde(default)]
+    pub trust_forwarded_for: bool,
+    /// Public base URL of this server (e.g. `https://delta.example.com`),
+    /// used where absolute URLs must be handed to clients (Git LFS).
+    /// Defaults to `federation.instance_url`, then the request's Host.
+    #[serde(default)]
+    pub external_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,11 +77,12 @@ pub struct AuthConfig {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RegistryConfig {
-    /// Maximum age in days before artifacts are eligible for cleanup.
+    /// Maximum age in days before artifacts are eligible for cleanup
+    /// (unset or 0: no limit).
     pub max_artifact_age_days: Option<u32>,
-    /// Maximum number of artifacts per repository.
+    /// Maximum number of artifacts per repository (unset or 0: no limit).
     pub max_artifacts_per_repo: Option<u32>,
-    /// Maximum total artifact bytes per repository.
+    /// Maximum total artifact bytes per repository (unset or 0: no limit).
     pub max_total_bytes_per_repo: Option<u64>,
 }
 
@@ -149,6 +160,22 @@ fn default_ssh_port() -> u16 {
     2222
 }
 
+/// Sample `secrets_key` values shipped in defaults and example configs.
+const PLACEHOLDER_SECRETS_KEYS: &[&str] = &[
+    "delta-change-me-in-production",
+    "change-me-to-a-strong-random-passphrase",
+    "change-this-to-a-random-string",
+    "dev-only-not-for-production",
+];
+
+impl AuthConfig {
+    /// Whether `secrets_key` is one of the publicly known sample values,
+    /// which protect nothing.
+    pub fn secrets_key_is_placeholder(&self) -> bool {
+        PLACEHOLDER_SECRETS_KEYS.contains(&self.secrets_key.as_str())
+    }
+}
+
 fn default_secrets_key() -> String {
     "delta-change-me-in-production".into()
 }
@@ -167,7 +194,7 @@ fn default_daimon_url() -> String {
     "http://localhost:8090".into()
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FederationConfig {
     /// Enable federation with other Delta instances.
     #[serde(default)]
@@ -185,6 +212,19 @@ pub struct FederationConfig {
 
 fn default_federation_timeout() -> u64 {
     30
+}
+
+// Not derived: a derived Default would give `timeout_secs = 0` (instant
+// timeouts) whenever the `[federation]` table is omitted.
+impl Default for FederationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            instance_url: None,
+            instance_name: None,
+            timeout_secs: default_federation_timeout(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -301,6 +341,8 @@ impl Default for DeltaConfig {
                 port: 8070,
                 api_prefix: "/api/v1".into(),
                 cors_origins: vec![],
+                trust_forwarded_for: false,
+                external_url: None,
             },
             storage: StorageConfig {
                 repos_dir: PathBuf::from("/var/lib/delta/repos"),
@@ -329,6 +371,31 @@ impl Default for DeltaConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_sample_secrets_keys_are_detected() {
+        for sample in [
+            include_str!("../../../config/delta.example.toml"),
+            include_str!("../../../config/delta.dev.toml"),
+            include_str!("../../../config/delta.private.toml"),
+            include_str!("../../../config/delta.docker.toml"),
+        ] {
+            let config: DeltaConfig = toml::from_str(sample).unwrap();
+            assert!(config.auth.secrets_key_is_placeholder());
+        }
+        assert!(DeltaConfig::default().auth.secrets_key_is_placeholder());
+        let mut config = DeltaConfig::default();
+        config.auth.secrets_key = "a-real-random-key-0f3c9e".into();
+        assert!(!config.auth.secrets_key_is_placeholder());
+    }
+
+    #[test]
+    fn test_federation_timeout_defaults_without_table() {
+        let config: DeltaConfig =
+            toml::from_str(include_str!("../../../config/delta.example.toml")).unwrap();
+        assert_eq!(config.federation.timeout_secs, 30);
+        assert_eq!(DeltaConfig::default().federation.timeout_secs, 30);
+    }
 
     #[test]
     fn test_default_config() {

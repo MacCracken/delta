@@ -147,6 +147,11 @@
   </div>
 </div>
 
+{% if too_large %}
+<div class="empty-state">
+  <p>This file is too large to display. <a href="/{{ owner }}/{{ repo }}/-/raw/{{ rev }}/{{ path }}">View it raw</a>.</p>
+</div>
+{% else %}
 <div class="code-viewer">
   <table>
     <tbody>
@@ -159,6 +164,7 @@
     </tbody>
   </table>
 </div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}

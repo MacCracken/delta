@@ -94,7 +94,7 @@ impl AiClient {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let body = error_body(resp).await;
             return Err(DeltaError::Storage(format!(
                 "Anthropic API error {}: {}",
                 status, body
@@ -158,7 +158,7 @@ impl AiClient {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let body = error_body(resp).await;
             return Err(DeltaError::Storage(format!(
                 "OpenAI API error {}: {}",
                 status, body
@@ -233,7 +233,7 @@ impl AiClient {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let body = error_body(resp).await;
             return Err(DeltaError::Storage(format!(
                 "Hoosh API error {}: {}",
                 status, body
@@ -299,10 +299,16 @@ impl AiClient {
             The body should have a Summary section with bullet points and a Test Plan section. \
             Respond in JSON format with fields: title (string), body (string).";
 
-        let commit_list = commits.join("\n- ");
+        // Bound the prompt: a long history must not become a huge request.
+        let commit_list = commits
+            .iter()
+            .take(100)
+            .map(|c| truncate_for_context(c, 200))
+            .collect::<Vec<_>>()
+            .join("\n- ");
         let prompt = format!(
             "Generate a PR description for these changes:\n\nCommits:\n- {}\n\nDiff:\n```\n{}\n```\n\nRespond with JSON only.",
-            commit_list,
+            truncate_for_context(&commit_list, 8000),
             truncate_for_context(diff, 12000)
         );
 
@@ -344,7 +350,7 @@ impl AiClient {
         let prompt = format!(
             "Repository context:\n{}\n\nQuestion: {}",
             truncate_for_context(context, 12000),
-            question
+            truncate_for_context(question, 4000)
         );
 
         let messages = vec![Message {
@@ -357,14 +363,18 @@ impl AiClient {
     }
 }
 
-/// Truncate text to fit within a character limit, keeping the beginning.
-fn truncate_for_context(text: &str, max_chars: usize) -> &str {
-    if text.len() <= max_chars {
-        text
-    } else {
-        // Just truncate — the LLM can work with partial diffs
-        &text[..max_chars]
+/// Truncate text to at most `max_bytes` bytes, keeping the beginning and
+/// never splitting a UTF-8 character.
+pub fn truncate_for_context(text: &str, max_bytes: usize) -> &str {
+    if text.len() <= max_bytes {
+        return text;
     }
+    // Just truncate — the LLM can work with partial diffs
+    let mut end = max_bytes;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 
 // ---- AI response types ----
@@ -428,4 +438,34 @@ fn extract_json(content: &str) -> &str {
         return json.trim();
     }
     trimmed
+}
+
+/// The start of an error response body, for logs: provider errors can be
+/// large, and are never passed on to API clients.
+async fn error_body(mut resp: reqwest::Response) -> String {
+    const LIMIT: usize = 4096;
+    let mut body = Vec::new();
+    while body.len() < LIMIT {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                body.extend_from_slice(&chunk[..chunk.len().min(LIMIT - body.len())])
+            }
+            _ => break,
+        }
+    }
+    String::from_utf8_lossy(&body).into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_truncate_for_context_respects_char_boundaries() {
+        let text = format!("{}é tail", "a".repeat(3999));
+        // Byte 4000 falls inside 'é' (2 bytes); must not panic.
+        assert_eq!(truncate_for_context(&text, 4000), "a".repeat(3999));
+        assert_eq!(truncate_for_context("short", 4000), "short");
+        assert_eq!(truncate_for_context("日本語", 4), "日");
+    }
 }

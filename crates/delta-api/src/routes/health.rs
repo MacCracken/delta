@@ -67,7 +67,7 @@ async fn metrics(State(state): State<AppState>) -> Json<serde_json::Value> {
         status_counts.insert(entry.key().to_string(), json!(*entry.value()));
     }
 
-    let avg_latency_us = if total > 0 { duration_us / total } else { 0 };
+    let avg_latency_us = duration_us.checked_div(total).unwrap_or(0);
 
     Json(json!({
         "uptime_secs": uptime,

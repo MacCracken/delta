@@ -207,3 +207,107 @@ async fn test_db_init_pool() {
         .unwrap();
     assert_eq!(user.username, "inituser");
 }
+
+#[tokio::test]
+async fn test_db_init_pool_reopens_existing_database() {
+    let tmp = tempfile::tempdir().unwrap();
+    let url = format!("sqlite://{}", tmp.path().join("delta.db").display());
+
+    let applied = |pool: sqlx::SqlitePool| async move {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM schema_migrations")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
+
+    let pool = db::init_pool(&url).await.unwrap();
+    db::user::create(&pool, "first", "first@test.com", "pass", false)
+        .await
+        .unwrap();
+    let applied_first = applied(pool.clone()).await;
+    assert!(applied_first >= 15);
+    pool.close().await;
+
+    // A restart must not re-run non-idempotent migrations (ADD COLUMN).
+    let pool = db::init_pool(&url).await.unwrap();
+    let user = db::user::get_by_username(&pool, "first").await.unwrap();
+    assert_eq!(user.username, "first");
+    assert_eq!(applied(pool.clone()).await, applied_first);
+}
+
+#[tokio::test]
+async fn test_db_init_pool_upgrades_untracked_legacy_database() {
+    let tmp = tempfile::tempdir().unwrap();
+    let url = format!("sqlite://{}", tmp.path().join("delta.db").display());
+
+    // Recreate the layout older releases left behind: every migration applied
+    // once, `is_admin` added out of band, and no `schema_migrations` table.
+    {
+        let pool = sqlx::SqlitePool::connect(&format!("{url}?mode=rwc"))
+            .await
+            .unwrap();
+        for sql in [
+            include_str!("../migrations/001_initial.sql"),
+            include_str!("../migrations/002_git_protocol.sql"),
+            include_str!("../migrations/003_pull_requests.sql"),
+            include_str!("../migrations/004_cicd.sql"),
+            include_str!("../migrations/005_registry.sql"),
+            include_str!("../migrations/006_collaborators.sql"),
+            include_str!("../migrations/007_forks_and_templates.sql"),
+            include_str!("../migrations/008_lfs.sql"),
+            include_str!("../migrations/009_cascade_fixes.sql"),
+            include_str!("../migrations/010_search.sql"),
+            include_str!("../migrations/011_federation.sql"),
+            include_str!("../migrations/012_encryption.sql"),
+            include_str!("../migrations/013_workspaces.sql"),
+            include_str!("../migrations/015_runners.sql"),
+            "ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT FALSE",
+        ] {
+            sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+        }
+        let legacy = db::user::create(&pool, "legacy", "legacy@test.com", "pass", false)
+            .await
+            .unwrap();
+        let other = db::user::create(&pool, "other", "other@test.com", "pass", false)
+            .await
+            .unwrap();
+        // Only the key text was unique: the same key registered twice.
+        for (user, text) in [(&legacy, "AAAA legacy"), (&other, "AAAA other")] {
+            db::ssh_key::add(&pool, &user.id.to_string(), "k", text, "SHA256:dup")
+                .await
+                .unwrap();
+        }
+        pool.close().await;
+    }
+
+    let pool = db::init_pool(&url).await.unwrap();
+    let user = db::user::get_by_username(&pool, "legacy").await.unwrap();
+    // The earliest user of an install without an admin is promoted.
+    assert!(user.is_admin);
+    // The earliest registration of a duplicated key is kept.
+    let (owner, _) = db::ssh_key::get_user_by_fingerprint(&pool, "SHA256:dup")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(owner, user.id.to_string());
+    let keys: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ssh_keys")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(keys, 1);
+}
+
+#[tokio::test]
+async fn test_db_init_pool_rejects_non_sqlite_urls() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = std::env::current_dir().unwrap();
+    for url in ["postgres://delta:pw@db/delta", "mysql://localhost/x"] {
+        let err = db::init_pool(url).await.unwrap_err();
+        assert!(err.to_string().contains("only sqlite"), "{err}");
+        // The password must not be echoed back.
+        assert!(!err.to_string().contains("pw@"), "{err}");
+    }
+    // Nothing was created as a side effect.
+    assert!(!cwd.join("postgres:").exists());
+    drop(tmp);
+}

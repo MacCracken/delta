@@ -140,33 +140,56 @@ impl AuditRow {
     }
 }
 
-/// List audit entries filtered by date range for compliance export.
-pub async fn list_for_export(
-    pool: &SqlitePool,
-    since: Option<&str>,
-    until: Option<&str>,
-    resource_type: Option<&str>,
-    limit: i64,
-    offset: i64,
-) -> Result<Vec<AuditEntry>> {
-    let mut sql = String::from("SELECT * FROM audit_log WHERE 1=1");
-    let mut binds: Vec<String> = Vec::new();
+/// Filters for a compliance export.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ExportFilter<'a> {
+    /// Only this user's entries.
+    pub user_id: Option<&'a str>,
+    /// Entries at or after this time (RFC 3339 or `YYYY-MM-DD`).
+    pub since: Option<&'a str>,
+    /// Entries at or before this time (RFC 3339 or `YYYY-MM-DD`).
+    pub until: Option<&'a str>,
+    pub resource_type: Option<&'a str>,
+}
 
-    if let Some(s) = since {
-        sql.push_str(" AND created_at >= ?");
-        binds.push(s.to_string());
+/// `WHERE` clause and bound values for `filter`.
+fn export_where(filter: &ExportFilter<'_>) -> (String, Vec<String>) {
+    let mut sql = String::from(" WHERE 1=1");
+    let mut binds: Vec<String> = Vec::new();
+    if let Some(uid) = filter.user_id {
+        sql.push_str(" AND user_id = ?");
+        binds.push(uid.to_string());
     }
-    if let Some(u) = until {
-        sql.push_str(" AND created_at <= ?");
-        binds.push(u.to_string());
+    // Timestamps are stored as RFC 3339 text: compare them as times, not
+    // as strings (which misorders e.g. "2026-01-01 10:00" and "...T09:00").
+    if let Some(since) = filter.since {
+        sql.push_str(" AND datetime(created_at) >= datetime(?)");
+        binds.push(since.to_string());
     }
-    if let Some(rt) = resource_type {
+    if let Some(until) = filter.until {
+        sql.push_str(" AND datetime(created_at) <= datetime(?)");
+        binds.push(until.to_string());
+    }
+    if let Some(rt) = filter.resource_type {
         sql.push_str(" AND resource_type = ?");
         binds.push(rt.to_string());
     }
-    sql.push_str(" ORDER BY created_at ASC LIMIT ? OFFSET ?");
+    (sql, binds)
+}
 
-    let mut query = sqlx::query_as::<_, AuditRow>(&sql);
+/// List audit entries for a compliance export, oldest first.
+pub async fn list_for_export(
+    pool: &SqlitePool,
+    filter: &ExportFilter<'_>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<AuditEntry>> {
+    let (where_clause, binds) = export_where(filter);
+    let sql =
+        format!("SELECT * FROM audit_log{where_clause} ORDER BY created_at ASC LIMIT ? OFFSET ?");
+
+    // Only static fragments and `?` placeholders make up the query; values are bound.
+    let mut query = sqlx::query_as::<_, AuditRow>(sqlx::AssertSqlSafe(sql));
     for b in &binds {
         query = query.bind(b);
     }
@@ -181,29 +204,12 @@ pub async fn list_for_export(
 }
 
 /// Count audit entries matching export filters (for pagination).
-pub async fn count_for_export(
-    pool: &SqlitePool,
-    since: Option<&str>,
-    until: Option<&str>,
-    resource_type: Option<&str>,
-) -> Result<i64> {
-    let mut sql = String::from("SELECT COUNT(*) as count FROM audit_log WHERE 1=1");
-    let mut binds: Vec<String> = Vec::new();
+pub async fn count_for_export(pool: &SqlitePool, filter: &ExportFilter<'_>) -> Result<i64> {
+    let (where_clause, binds) = export_where(filter);
+    let sql = format!("SELECT COUNT(*) as count FROM audit_log{where_clause}");
 
-    if let Some(s) = since {
-        sql.push_str(" AND created_at >= ?");
-        binds.push(s.to_string());
-    }
-    if let Some(u) = until {
-        sql.push_str(" AND created_at <= ?");
-        binds.push(u.to_string());
-    }
-    if let Some(rt) = resource_type {
-        sql.push_str(" AND resource_type = ?");
-        binds.push(rt.to_string());
-    }
-
-    let mut query = sqlx::query_scalar::<_, i64>(&sql);
+    // Only static fragments and `?` placeholders make up the query; values are bound.
+    let mut query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql));
     for b in &binds {
         query = query.bind(b);
     }

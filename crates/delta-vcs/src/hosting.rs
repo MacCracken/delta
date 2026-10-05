@@ -33,7 +33,7 @@ impl RepoHost {
             )));
         }
         std::fs::create_dir_all(&path)?;
-        gix::init_bare(&path).map_err(|e: gix::init::Error| DeltaError::Storage(e.to_string()))?;
+        gix::init_bare(&path).map_err(|e| DeltaError::Storage(e.to_string()))?;
         tracing::info!(owner, name, "initialized bare repository");
         Ok(path)
     }

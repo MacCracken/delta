@@ -42,6 +42,10 @@ pub enum SandboxMode {
 }
 
 /// Execute a single job's steps in order.
+///
+/// `secret_needles` (see [`crate::mask::secret_needles`]) are redacted from
+/// every output line before it is streamed or buffered.
+#[allow(clippy::too_many_arguments)]
 pub async fn execute_job(
     job_name: &str,
     job: &Job,
@@ -50,6 +54,7 @@ pub async fn execute_job(
     job_id: Option<&str>,
     sender: Option<&broadcast::Sender<PipelineEvent>>,
     sandbox: &SandboxMode,
+    secret_needles: &[String],
 ) -> JobResult {
     let mut steps = Vec::new();
     let mut all_passed = true;
@@ -76,7 +81,15 @@ pub async fn execute_job(
         }
 
         let result = run_step(
-            &step_name, cmd, work_dir, env_vars, step_idx, job_id, sender, sandbox,
+            &step_name,
+            cmd,
+            work_dir,
+            env_vars,
+            step_idx,
+            job_id,
+            sender,
+            sandbox,
+            secret_needles,
         )
         .await;
 
@@ -327,16 +340,32 @@ const STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60
 const MAX_OUTPUT_SIZE: usize = 2 * 1024 * 1024;
 
 /// Build the Command for a step, applying sandbox if configured.
+///
+/// Fails if the requested sandbox cannot be prepared; the step must not run
+/// unsandboxed in that case.
 fn build_step_command(
     cmd: &str,
     work_dir: &Path,
     env_vars: &HashMap<String, String>,
     sandbox: &SandboxMode,
-) -> Command {
+) -> Result<Command, String> {
+    let mut command = build_step_command_inner(cmd, work_dir, env_vars, sandbox)?;
+    // Own process group, so a timeout can kill everything the step started.
+    #[cfg(unix)]
+    command.process_group(0);
+    Ok(command)
+}
+
+fn build_step_command_inner(
+    cmd: &str,
+    work_dir: &Path,
+    env_vars: &HashMap<String, String>,
+    sandbox: &SandboxMode,
+) -> Result<Command, String> {
     match sandbox {
-        SandboxMode::Container { runtime, image } => {
-            crate::container::build_container_command(runtime, image, cmd, work_dir, env_vars)
-        }
+        SandboxMode::Container { runtime, image } => Ok(crate::container::build_container_command(
+            runtime, image, cmd, work_dir, env_vars,
+        )),
         _ => {
             let mut command = Command::new("sh");
             command
@@ -347,19 +376,18 @@ fn build_step_command(
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
 
-            // Apply Landlock sandbox on Linux
+            // Apply Landlock + seccomp on Linux. Everything is prepared here,
+            // in the parent; the child only issues the restricting syscalls.
             #[cfg(target_os = "linux")]
             if matches!(sandbox, SandboxMode::Landlock) {
-                let sandbox_work_dir = work_dir.to_path_buf();
+                let mut prepared = crate::sandbox::PreparedSandbox::prepare(work_dir)?;
+                // SAFETY: `PreparedSandbox::apply` is async-signal-safe.
                 unsafe {
-                    command.pre_exec(move || {
-                        crate::sandbox::apply_sandbox(&sandbox_work_dir)
-                            .map_err(std::io::Error::other)
-                    });
+                    command.pre_exec(move || prepared.apply());
                 }
             }
 
-            command
+            Ok(command)
         }
     }
 }
@@ -374,10 +402,21 @@ async fn run_step(
     job_id: Option<&str>,
     sender: Option<&broadcast::Sender<PipelineEvent>>,
     sandbox: &SandboxMode,
+    secret_needles: &[String],
 ) -> StepResult {
     tracing::info!(step = name, "executing step");
 
-    let mut command = build_step_command(cmd, work_dir, env_vars, sandbox);
+    let mut command = match build_step_command(cmd, work_dir, env_vars, sandbox) {
+        Ok(command) => command,
+        Err(e) => {
+            return StepResult {
+                name: name.to_string(),
+                exit_code: -1,
+                stdout: String::new(),
+                stderr: format!("failed to set up sandbox: {}", e),
+            };
+        }
+    };
 
     let mut child = match command.spawn() {
         Ok(c) => c,
@@ -391,6 +430,7 @@ async fn run_step(
         }
     };
 
+    let pgid = child.id();
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
 
@@ -399,99 +439,141 @@ async fn run_step(
     let jid = job_id.map(|s| s.to_string());
     let sidx = step_index;
 
-    let stream_result = tokio::time::timeout(STEP_TIMEOUT, async {
-        let mut stdout_reader = stdout_pipe.map(|p| BufReader::new(p).lines());
-        let mut stderr_reader = stderr_pipe.map(|p| BufReader::new(p).lines());
+    let mut stdout_reader = stdout_pipe.map(|p| BufReader::new(p).lines());
+    let mut stderr_reader = stderr_pipe.map(|p| BufReader::new(p).lines());
+    let mut stdout_done = stdout_reader.is_none();
+    let mut stderr_done = stderr_reader.is_none();
+    let mut out = String::new();
+    let mut err = String::new();
+    let mut out_truncated = false;
+    let mut err_truncated = false;
 
-        let mut stdout_done = stdout_reader.is_none();
-        let mut stderr_done = stderr_reader.is_none();
-        let mut out = String::new();
-        let mut err = String::new();
-        let mut out_truncated = false;
-        let mut err_truncated = false;
+    let deadline = tokio::time::Instant::now() + STEP_TIMEOUT;
+    let mut exit_status = None;
+    let mut grace_deadline = deadline;
+    let mut timed_out = false;
+    let mut lingering = false;
 
-        loop {
-            if stdout_done && stderr_done {
-                break;
-            }
-
-            tokio::select! {
-                line = async {
-                    if let Some(ref mut reader) = stdout_reader {
-                        reader.next_line().await
-                    } else {
-                        std::future::pending().await
-                    }
-                }, if !stdout_done => {
-                    match line {
-                        Ok(Some(l)) => {
-                            if let (Some(tx), Some(jid)) = (&tx, &jid) {
-                                let _ = tx.send(PipelineEvent::StepOutput {
-                                    job_id: jid.clone(),
-                                    step_index: sidx,
-                                    line: l.clone(),
-                                });
-                            }
-                            if !out_truncated {
-                                if out.len() + l.len() + 1 > MAX_OUTPUT_SIZE {
-                                    out.push_str("\n... [stdout truncated at 2 MB]");
-                                    out_truncated = true;
-                                } else {
-                                    out.push_str(&l);
-                                    out.push('\n');
-                                }
-                            }
-                        }
-                        Ok(None) => stdout_done = true,
-                        Err(_) => stdout_done = true,
-                    }
-                }
-                line = async {
-                    if let Some(ref mut reader) = stderr_reader {
-                        reader.next_line().await
-                    } else {
-                        std::future::pending().await
-                    }
-                }, if !stderr_done => {
-                    match line {
-                        Ok(Some(l)) => {
-                            if let (Some(tx), Some(jid)) = (&tx, &jid) {
-                                let _ = tx.send(PipelineEvent::StepOutput {
-                                    job_id: jid.clone(),
-                                    step_index: sidx,
-                                    line: l.clone(),
-                                });
-                            }
-                            if !err_truncated {
-                                if err.len() + l.len() + 1 > MAX_OUTPUT_SIZE {
-                                    err.push_str("\n... [stderr truncated at 2 MB]");
-                                    err_truncated = true;
-                                } else {
-                                    err.push_str(&l);
-                                    err.push('\n');
-                                }
-                            }
-                        }
-                        Ok(None) => stderr_done = true,
-                        Err(_) => stderr_done = true,
-                    }
-                }
-            }
+    loop {
+        if stdout_done && stderr_done {
+            break;
         }
 
-        let status = child.wait().await;
-        (out, err, status)
-    })
-    .await;
+        tokio::select! {
+            line = async {
+                if let Some(ref mut reader) = stdout_reader {
+                    reader.next_line().await
+                } else {
+                    std::future::pending().await
+                }
+            }, if !stdout_done => {
+                match line {
+                    Ok(Some(l)) => {
+                        let l = crate::mask::mask_secrets(&l, secret_needles);
+                        if let (Some(tx), Some(jid)) = (&tx, &jid) {
+                            let _ = tx.send(PipelineEvent::StepOutput {
+                                job_id: jid.clone(),
+                                step_index: sidx,
+                                line: l.clone(),
+                            });
+                        }
+                        if !out_truncated {
+                            if out.len() + l.len() + 1 > MAX_OUTPUT_SIZE {
+                                out.push_str("\n... [stdout truncated at 2 MB]");
+                                out_truncated = true;
+                            } else {
+                                out.push_str(&l);
+                                out.push('\n');
+                            }
+                        }
+                    }
+                    Ok(None) => stdout_done = true,
+                    Err(_) => stdout_done = true,
+                }
+            }
+            line = async {
+                if let Some(ref mut reader) = stderr_reader {
+                    reader.next_line().await
+                } else {
+                    std::future::pending().await
+                }
+            }, if !stderr_done => {
+                match line {
+                    Ok(Some(l)) => {
+                        let l = crate::mask::mask_secrets(&l, secret_needles);
+                        if let (Some(tx), Some(jid)) = (&tx, &jid) {
+                            let _ = tx.send(PipelineEvent::StepOutput {
+                                job_id: jid.clone(),
+                                step_index: sidx,
+                                line: l.clone(),
+                            });
+                        }
+                        if !err_truncated {
+                            if err.len() + l.len() + 1 > MAX_OUTPUT_SIZE {
+                                err.push_str("\n... [stderr truncated at 2 MB]");
+                                err_truncated = true;
+                            } else {
+                                err.push_str(&l);
+                                err.push('\n');
+                            }
+                        }
+                    }
+                    Ok(None) => stderr_done = true,
+                    Err(_) => stderr_done = true,
+                }
+            }
+            status = child.wait(), if exit_status.is_none() => {
+                exit_status = Some(status);
+                grace_deadline = tokio::time::Instant::now() + PIPE_GRACE;
+            }
+            // The step exited, but a process it started still holds its
+            // output open (e.g. `daemon &`); stop waiting for EOF.
+            _ = tokio::time::sleep_until(grace_deadline), if exit_status.is_some() => {
+                lingering = true;
+                break;
+            }
+            _ = tokio::time::sleep_until(deadline), if exit_status.is_none() => {
+                timed_out = true;
+                break;
+            }
+        }
+    }
 
-    match stream_result {
-        Ok((out, err, Ok(status))) => StepResult {
+    if timed_out || lingering {
+        // Kill the whole process group, not just the shell: grandchildren
+        // would otherwise keep running (and keep the pipes open).
+        kill_process_group(pgid);
+        let _ = child.kill().await;
+    }
+    let status = match exit_status {
+        Some(status) => status,
+        None => child.wait().await,
+    };
+
+    if timed_out {
+        err.push_str(&format!(
+            "\nstep timed out after {} seconds",
+            STEP_TIMEOUT.as_secs()
+        ));
+        return StepResult {
+            name: name.to_string(),
+            exit_code: -1,
+            stdout: out,
+            stderr: err,
+        };
+    }
+    if lingering {
+        err.push_str("\n[background processes still holding the step's output were killed]");
+    }
+
+    match status {
+        Ok(status) => StepResult {
             name: name.to_string(),
             exit_code: status.code().unwrap_or(-1),
             stdout: out,
             stderr: err,
         },
-        Ok((out, mut err, Err(e))) => {
+        Err(e) => {
             err.push_str(&format!("\nprocess error: {}", e));
             StepResult {
                 name: name.to_string(),
@@ -500,17 +582,23 @@ async fn run_step(
                 stderr: err,
             }
         }
-        Err(_) => {
-            // Timeout — kill the child
-            let _ = child.kill().await;
-            StepResult {
-                name: name.to_string(),
-                exit_code: -1,
-                stdout: String::new(),
-                stderr: format!("step timed out after {} seconds", STEP_TIMEOUT.as_secs()),
-            }
+    }
+}
+
+/// How long to keep reading output after the step's process has exited.
+const PIPE_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// SIGKILL every process in the step's process group (its pid as pgid).
+fn kill_process_group(pgid: Option<u32>) {
+    #[cfg(target_os = "linux")]
+    if let Some(pgid) = pgid.and_then(|p| i32::try_from(p).ok()) {
+        // SAFETY: kill(2) on the process group created for this step.
+        unsafe {
+            libc::kill(-pgid, libc::SIGKILL);
         }
     }
+    #[cfg(not(target_os = "linux"))]
+    let _ = pgid;
 }
 
 #[cfg(test)]
@@ -654,11 +742,96 @@ mod tests {
             None,
             None,
             &SandboxMode::None,
+            &[],
         )
         .await;
         assert!(result.success);
         assert_eq!(result.steps.len(), 2);
         assert!(result.steps[0].stdout.contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_job_masks_secrets_in_stream_and_output() {
+        let job = Job {
+            name: None,
+            runs_on: None,
+            needs: vec![],
+            steps: vec![Step {
+                name: Some("Leak".into()),
+                run: Some("echo \"token=$API_TOKEN\"; echo \"$API_TOKEN\" >&2".into()),
+                uses: None,
+                with: HashMap::new(),
+            }],
+            uses: None,
+            with: HashMap::new(),
+            strategy: None,
+        };
+        let mut env = HashMap::new();
+        env.insert("API_TOKEN".to_string(), "hunter2-Secret".to_string());
+        let needles = crate::mask::secret_needles(["hunter2-Secret"]);
+        let (tx, mut rx) = broadcast::channel(64);
+
+        let result = execute_job(
+            "test",
+            &job,
+            std::path::Path::new("/tmp"),
+            &env,
+            Some("job-1"),
+            Some(&tx),
+            &SandboxMode::None,
+            &needles,
+        )
+        .await;
+        assert!(result.success);
+        assert!(!result.steps[0].stdout.contains("hunter2"));
+        assert!(!result.steps[0].stderr.contains("hunter2"));
+
+        let mut streamed = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let PipelineEvent::StepOutput { line, .. } = event {
+                streamed.push(line);
+            }
+        }
+        assert!(streamed.contains(&"token=***".to_string()));
+        assert!(streamed.iter().all(|l| !l.contains("hunter2")));
+    }
+
+    #[tokio::test]
+    async fn test_step_with_background_process_holding_output_completes() {
+        let job = Job {
+            name: None,
+            runs_on: None,
+            needs: vec![],
+            steps: vec![Step {
+                name: Some("Background".into()),
+                // The backgrounded sleep inherits stdout and keeps it open.
+                run: Some("sleep 300 & echo started".into()),
+                uses: None,
+                with: HashMap::new(),
+            }],
+            uses: None,
+            with: HashMap::new(),
+            strategy: None,
+        };
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            execute_job(
+                "test",
+                &job,
+                std::path::Path::new("/tmp"),
+                &HashMap::new(),
+                None,
+                None,
+                &SandboxMode::None,
+                &[],
+            ),
+        )
+        .await
+        .expect("step hung on an inherited pipe");
+        assert!(result.success);
+        assert!(result.steps[0].stdout.contains("started"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(30));
     }
 
     #[tokio::test]
@@ -694,6 +867,7 @@ mod tests {
             None,
             None,
             &SandboxMode::None,
+            &[],
         )
         .await;
         assert!(!result.success);

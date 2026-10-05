@@ -405,7 +405,7 @@ async fn ai_review_pr(
 
     let diff = delta_vcs::diff::diff_refs(&repo_path, &pr.base_branch, &pr.head_branch)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| crate::helpers::vcs_error(e, StatusCode::INTERNAL_SERVER_ERROR))?;
 
     let context = format!(
         "Repository: {}/{}\nPR #{}: {}\nBranch: {} -> {}",
@@ -415,8 +415,8 @@ async fn ai_review_pr(
     let review = ai.review_diff(&diff, &context).await.map_err(|e| {
         tracing::error!("AI review failed: {}", e);
         (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("AI review failed: {}", e),
+            StatusCode::BAD_GATEWAY,
+            "AI review failed: the AI provider returned an error".into(),
         )
     })?;
 
@@ -440,7 +440,7 @@ async fn ai_review_pr(
                 .join("\n"),
         );
 
-        let _ = db::pull_request::add_comment(
+        match db::pull_request::add_comment(
             &state.db,
             &pr.id.to_string(),
             &user.id.to_string(),
@@ -449,8 +449,14 @@ async fn ai_review_pr(
             None,
             None,
         )
-        .await;
-        true
+        .await
+        {
+            Ok(_) => true,
+            Err(e) => {
+                tracing::error!("failed to post AI review comment: {}", e);
+                false
+            }
+        }
     } else {
         false
     };
@@ -474,7 +480,7 @@ async fn ai_describe_pr(
 
     let diff = delta_vcs::diff::diff_refs(&repo_path, &req.base_branch, &req.head_branch)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| crate::helpers::vcs_error(e, StatusCode::INTERNAL_SERVER_ERROR))?;
 
     let commits = delta_vcs::diff::list_commits(&repo_path, &req.base_branch, &req.head_branch)
         .await
@@ -488,8 +494,8 @@ async fn ai_describe_pr(
         .map_err(|e| {
             tracing::error!("AI PR description failed: {}", e);
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("AI PR description failed: {}", e),
+                StatusCode::BAD_GATEWAY,
+                "AI PR description failed: the AI provider returned an error".into(),
             )
         })?;
 
@@ -522,8 +528,8 @@ async fn ai_summarize_commit(
         .map_err(|e| {
             tracing::error!("AI commit summary failed: {}", e);
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("AI commit summary failed: {}", e),
+                StatusCode::BAD_GATEWAY,
+                "AI commit summary failed: the AI provider returned an error".into(),
             )
         })?;
 
@@ -558,9 +564,14 @@ async fn ai_query_repo(
         .unwrap_or_default();
 
     // Try reading README
-    let readme_content = delta_vcs::browse::read_blob_text(&repo_path, "HEAD", "README.md")
-        .await
-        .ok();
+    let readme_content = delta_vcs::browse::read_blob_text(
+        &repo_path,
+        "HEAD",
+        "README.md",
+        crate::helpers::MAX_TEXT_FILE_BYTES,
+    )
+    .await
+    .ok();
 
     // Search for relevant files if FTS5 is available
     let repo_id = repo.id.to_string();
@@ -582,7 +593,7 @@ async fn ai_query_repo(
     for commit in &recent_commits {
         context.push_str(&format!(
             "  {} - {} ({})\n",
-            &commit.sha[..8.min(commit.sha.len())],
+            commit.sha.chars().take(8).collect::<String>(),
             commit.message,
             commit.author_name
         ));
@@ -591,12 +602,7 @@ async fn ai_query_repo(
     if let Some(readme) = &readme_content {
         context.push_str("\n## README.md\n");
         // Truncate README if very long
-        let readme_truncated = if readme.len() > 4000 {
-            &readme[..4000]
-        } else {
-            readme
-        };
-        context.push_str(readme_truncated);
+        context.push_str(delta_core::ai::truncate_for_context(readme, 4000));
         context.push('\n');
     }
 
@@ -609,13 +615,15 @@ async fn ai_query_repo(
 
     // Try to read content of relevant files for more context
     for file_path in &relevant_files {
-        if let Ok(content) = delta_vcs::browse::read_blob_text(&repo_path, "HEAD", file_path).await
+        if let Ok(content) = delta_vcs::browse::read_blob_text(
+            &repo_path,
+            "HEAD",
+            file_path,
+            crate::helpers::MAX_TEXT_FILE_BYTES,
+        )
+        .await
         {
-            let truncated = if content.len() > 2000 {
-                &content[..2000]
-            } else {
-                &content
-            };
+            let truncated = delta_core::ai::truncate_for_context(&content, 2000);
             context.push_str(&format!(
                 "\n## File: {}\n```\n{}\n```\n",
                 file_path, truncated
@@ -626,8 +634,8 @@ async fn ai_query_repo(
     let answer = ai.query_repo(&req.question, &context).await.map_err(|e| {
         tracing::error!("AI query failed: {}", e);
         (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("AI query failed: {}", e),
+            StatusCode::BAD_GATEWAY,
+            "AI query failed: the AI provider returned an error".into(),
         )
     })?;
 
@@ -708,18 +716,33 @@ async fn index_repo(
             )
         })?;
 
-    // Walk the tree and index all text files
-    let entries: Vec<String> = walk_tree_recursive(&repo_path, "HEAD", "").await;
+    // List all files in one pass and index the text files
+    let entries = delta_vcs::browse::list_blobs(&repo_path, "HEAD")
+        .await
+        .unwrap_or_default();
 
     let mut indexed = 0u64;
     let mut skipped = 0u64;
 
-    for entry_path in &entries {
-        // Read file content
-        match delta_vcs::browse::read_blob_text(&repo_path, "HEAD", entry_path).await {
+    for (n, entry) in entries.iter().enumerate() {
+        // Bound the work a single request can trigger, and never read
+        // very large files (> 1MB) into memory.
+        if n >= MAX_INDEXED_FILES || entry.size > MAX_INDEXED_FILE_SIZE {
+            skipped += 1;
+            continue;
+        }
+        let entry_path = &entry.path;
+        match delta_vcs::browse::read_blob_text(
+            &repo_path,
+            "HEAD",
+            entry_path,
+            MAX_INDEXED_FILE_SIZE,
+        )
+        .await
+        {
             Ok(content) => {
-                // Skip very large files (> 1MB) and likely binary files
-                if content.len() > 1_048_576 || is_likely_binary(&content) {
+                // Skip likely binary files
+                if is_likely_binary(&content) {
                     skipped += 1;
                     continue;
                 }
@@ -745,30 +768,10 @@ async fn index_repo(
     })))
 }
 
-/// Recursively walk a git tree to get all blob paths.
-fn walk_tree_recursive<'a>(
-    repo_path: &'a std::path::Path,
-    rev: &'a str,
-    prefix: &'a str,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<String>> + Send + 'a>> {
-    Box::pin(async move {
-        let entries = match delta_vcs::browse::list_tree(repo_path, rev, prefix).await {
-            Ok(e) => e,
-            Err(_) => return Vec::new(),
-        };
-
-        let mut paths = Vec::new();
-        for entry in entries {
-            if entry.kind == "blob" {
-                paths.push(entry.path.clone());
-            } else if entry.kind == "tree" {
-                let sub = walk_tree_recursive(repo_path, rev, &entry.path).await;
-                paths.extend(sub);
-            }
-        }
-        paths
-    })
-}
+/// Maximum number of files indexed per repository.
+const MAX_INDEXED_FILES: usize = 20_000;
+/// Files larger than this are not indexed.
+const MAX_INDEXED_FILE_SIZE: u64 = 1_048_576;
 
 /// Check if content is likely binary (contains null bytes).
 fn is_likely_binary(content: &str) -> bool {

@@ -120,7 +120,7 @@ async fn create_webhook(
             "webhook URL must use HTTPS (webhooks.https_only is enabled)".into(),
         ));
     }
-    if crate::routes::git::is_private_url(&req.url) {
+    if crate::ssrf::is_private_url(&req.url) {
         return Err((
             StatusCode::BAD_REQUEST,
             "webhook URL must not target private networks".into(),

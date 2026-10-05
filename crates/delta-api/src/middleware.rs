@@ -86,6 +86,34 @@ impl Metrics {
     }
 }
 
+/// Rate-limit key for a request: the TCP peer address, or — only when
+/// `trust_forwarded_for` is set because a reverse proxy appends it — the
+/// right-most `X-Forwarded-For` entry. Entries further left are supplied by
+/// the client and must never be used as an identity.
+pub fn client_ip(
+    headers: &axum::http::HeaderMap,
+    extensions: &axum::http::Extensions,
+    trust_forwarded_for: bool,
+) -> String {
+    if trust_forwarded_for
+        && let Some(ip) = headers
+            .get_all("x-forwarded-for")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .flat_map(|v| v.split(','))
+            .filter_map(|s| s.trim().parse::<std::net::IpAddr>().ok())
+            .next_back()
+    {
+        return ip.to_string();
+    }
+    extensions
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|ci| ci.0.ip().to_string())
+        // Never exempt a request from limiting: an unidentifiable client
+        // shares one bucket.
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 /// Axum middleware that records request metrics (status code, latency) and
 /// enforces the global rate limit. Applied to every request via the router.
 pub async fn metrics_and_rate_limit(
@@ -95,21 +123,12 @@ pub async fn metrics_and_rate_limit(
 ) -> Response {
     // --- rate limit ---
     if let Some(ref limiter) = state.rate_limiter {
-        // Extract client IP from ConnectInfo or forwarded headers
-        let ip = req
-            .headers()
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.split(',').next())
-            .map(|s| s.trim().to_string())
-            .or_else(|| {
-                req.extensions()
-                    .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-                    .map(|ci| ci.0.ip().to_string())
-            })
-            .unwrap_or_default();
-
-        if !ip.is_empty() && limiter.check(&ip).is_none() {
+        let ip = client_ip(
+            req.headers(),
+            req.extensions(),
+            state.config.server.trust_forwarded_for,
+        );
+        if limiter.check(&ip).is_none() {
             return Response::builder()
                 .status(axum::http::StatusCode::TOO_MANY_REQUESTS)
                 .header("retry-after", limiter.window_secs.to_string())
@@ -175,6 +194,24 @@ mod tests {
         let limiter = RateLimiter::new(5, 0); // 0-second window
         assert!(limiter.check("1.2.3.4").is_some());
         limiter.cleanup(); // Should remove expired
+    }
+
+    #[test]
+    fn test_client_ip_ignores_forwarded_for_unless_trusted() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-forwarded-for", "6.6.6.6, 10.0.0.9".parse().unwrap());
+        let mut extensions = axum::http::Extensions::new();
+        extensions.insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+            [192, 0, 2, 1],
+            4000,
+        ))));
+        assert_eq!(client_ip(&headers, &extensions, false), "192.0.2.1");
+        // Behind a trusted proxy, the entry the proxy appended (right-most).
+        assert_eq!(client_ip(&headers, &extensions, true), "10.0.0.9");
+        assert_eq!(
+            client_ip(&headers, &axum::http::Extensions::new(), false),
+            "unknown"
+        );
     }
 
     #[test]

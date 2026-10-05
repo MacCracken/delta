@@ -60,7 +60,7 @@ fn load_template(repo_path: &Path, template_name: &str) -> Option<JobTemplate> {
 /// For each job with a `uses` field, load the template and merge its
 /// steps/config into the job. The job's own fields take precedence.
 pub fn resolve_templates(repo_path: &Path, workflow: &mut Workflow) {
-    for (_job_key, job) in workflow.jobs.iter_mut() {
+    for job in workflow.jobs.values_mut() {
         let template_name = match &job.uses {
             Some(name) => name.clone(),
             None => continue,

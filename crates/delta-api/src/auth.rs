@@ -1,14 +1,14 @@
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
+use argon2::Argon2;
+use argon2::password_hash::{PasswordHasher, PasswordVerifier, phc::PasswordHash};
 use delta_core::models::user::User;
 use delta_core::{DeltaError, Result, db};
 use sqlx::SqlitePool;
 
 /// Hash a password with argon2.
 pub fn hash_password(password: &str) -> Result<String> {
-    let salt = SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
-    let argon2 = Argon2::default();
-    let hash = argon2
-        .hash_password(password.as_bytes(), &salt)
+    // A random salt is generated internally from the OS RNG.
+    let hash = Argon2::default()
+        .hash_password(password.as_bytes())
         .map_err(|e| DeltaError::AuthFailed(e.to_string()))?;
     Ok(hash.to_string())
 }
@@ -58,8 +58,22 @@ pub async fn register(
     password: &str,
     is_agent: bool,
 ) -> Result<User> {
-    let pw_hash = hash_password(password)?;
+    let pw_hash = blocking_password_op({
+        let password = password.to_string();
+        move || hash_password(&password)
+    })
+    .await?;
     db::user::create(pool, username, email, &pw_hash, is_agent).await
+}
+
+/// Run a deliberately slow password hash on the blocking thread pool, so
+/// floods of logins cannot stall the async runtime's worker threads.
+async fn blocking_password_op<T: Send + 'static>(
+    op: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    tokio::task::spawn_blocking(op)
+        .await
+        .map_err(|e| DeltaError::Storage(format!("password hashing task failed: {e}")))?
 }
 
 /// Compute token expiry timestamp from config.
@@ -80,7 +94,12 @@ pub async fn login(
 ) -> Result<(User, String)> {
     let (user_id, pw_hash) = db::user::get_password_hash(pool, username).await?;
 
-    if !verify_password(password, &pw_hash)? {
+    let verified = blocking_password_op({
+        let password = password.to_string();
+        move || verify_password(&password, &pw_hash)
+    })
+    .await?;
+    if !verified {
         return Err(DeltaError::AuthFailed("invalid credentials".into()));
     }
 

@@ -241,19 +241,35 @@ async fn test_audit_list_for_export() {
             .unwrap();
     }
 
-    let entries = db::audit::list_for_export(&pool, None, None, None, 100, 0)
+    let entries = db::audit::list_for_export(&pool, &Default::default(), 100, 0)
         .await
         .unwrap();
     assert_eq!(entries.len(), 3);
 
-    let entries = db::audit::list_for_export(&pool, None, None, Some("repo"), 100, 0)
-        .await
-        .unwrap();
+    let entries = db::audit::list_for_export(
+        &pool,
+        &db::audit::ExportFilter {
+            resource_type: Some("repo"),
+            ..Default::default()
+        },
+        100,
+        0,
+    )
+    .await
+    .unwrap();
     assert_eq!(entries.len(), 3);
 
-    let entries = db::audit::list_for_export(&pool, None, None, Some("nonexistent"), 100, 0)
-        .await
-        .unwrap();
+    let entries = db::audit::list_for_export(
+        &pool,
+        &db::audit::ExportFilter {
+            resource_type: Some("nonexistent"),
+            ..Default::default()
+        },
+        100,
+        0,
+    )
+    .await
+    .unwrap();
     assert!(entries.is_empty());
 }
 
@@ -269,7 +285,7 @@ async fn test_audit_count_for_export() {
             .unwrap();
     }
 
-    let count = db::audit::count_for_export(&pool, None, None, None)
+    let count = db::audit::count_for_export(&pool, &Default::default())
         .await
         .unwrap();
     assert_eq!(count, 5);
@@ -295,15 +311,60 @@ async fn test_audit_export_pagination() {
         .unwrap();
     }
 
-    let page1 = db::audit::list_for_export(&pool, None, None, None, 3, 0)
+    let page1 = db::audit::list_for_export(&pool, &Default::default(), 3, 0)
         .await
         .unwrap();
     assert_eq!(page1.len(), 3);
 
-    let page2 = db::audit::list_for_export(&pool, None, None, None, 3, 3)
+    let page2 = db::audit::list_for_export(&pool, &Default::default(), 3, 3)
         .await
         .unwrap();
     assert_eq!(page2.len(), 3);
 
     assert_ne!(page1[0].id, page2[0].id);
+}
+
+#[tokio::test]
+async fn test_audit_export_filters_by_user_and_time() {
+    let pool = common::setup_pool().await;
+    let alice = common::create_test_user(&pool).await.id.to_string();
+    let bob = common::create_second_user(&pool).await.id.to_string();
+    for user in [&alice, &bob] {
+        db::audit::log(&pool, Some(user), "login", "user", None, None, None)
+            .await
+            .unwrap();
+    }
+
+    let only_alice = db::audit::ExportFilter {
+        user_id: Some(&alice),
+        ..Default::default()
+    };
+    let entries = db::audit::list_for_export(&pool, &only_alice, 100, 0)
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].user_id.as_deref(), Some(alice.as_str()));
+
+    // Time bounds compare as times: an hour ago (with a different
+    // offset and separator) is before now; an hour ahead is after.
+    let hour_ago = (chrono::Utc::now() - chrono::Duration::hours(1))
+        .with_timezone(&chrono::FixedOffset::east_opt(5 * 3600).unwrap())
+        .to_rfc3339();
+    let hour_ahead = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    let window = |since, until| db::audit::ExportFilter {
+        since,
+        until,
+        ..only_alice
+    };
+    for (since, until, expected) in [
+        (Some(hour_ago.as_str()), None, 1),
+        (Some(hour_ahead.as_str()), None, 0),
+        (None, Some(hour_ago.as_str()), 0),
+        (None, Some(hour_ahead.as_str()), 1),
+    ] {
+        let count = db::audit::count_for_export(&pool, &window(since, until))
+            .await
+            .unwrap();
+        assert_eq!(count, expected, "since {since:?} until {until:?}");
+    }
 }

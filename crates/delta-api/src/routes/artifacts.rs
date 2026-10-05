@@ -56,6 +56,9 @@ pub fn router() -> Router<AppState> {
             "/{owner}/{name}/releases/{tag}",
             get(get_release).delete(delete_release),
         )
+        .layer(axum::extract::DefaultBodyLimit::max(
+            crate::helpers::MAX_UPLOAD_BYTES,
+        ))
 }
 
 async fn list_artifacts(
@@ -149,6 +152,7 @@ async fn download_artifact(
     State(state): State<AppState>,
     Path((owner, name, artifact_id)): Path<(String, String, String)>,
     AuthUser(user): AuthUser,
+    method: axum::http::Method,
     headers: HeaderMap,
 ) -> Result<(StatusCode, Vec<u8>), (StatusCode, String)> {
     let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
@@ -163,6 +167,11 @@ async fn download_artifact(
         .blob_store
         .read(&artifact.content_hash)
         .map_err(|e| (StatusCode::NOT_FOUND, format!("blob not found: {}", e)))?;
+
+    // HEAD (served by this GET route) only probes: not a download.
+    if method == axum::http::Method::HEAD {
+        return Ok((StatusCode::OK, data));
+    }
 
     // Record download event with user-agent tracking
     let user_agent = headers
@@ -217,7 +226,12 @@ async fn delete_artifact(
             )
         })?;
 
-    let _ = state.blob_store.delete(&artifact.content_hash);
+    if let Err(e) =
+        delta_registry::store::release_blob(&state.db, &state.blob_store, &artifact.content_hash)
+            .await
+    {
+        tracing::warn!("failed to release artifact blob: {}", e);
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -285,7 +299,10 @@ async fn add_signature(
     AuthUser(user): AuthUser,
     Json(req): Json<AddSignatureRequest>,
 ) -> Result<(StatusCode, Json<db::signing::ArtifactSignature>), (StatusCode, String)> {
-    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
+    let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
+    // Attaching a signature vouches for the artifact on the repository's
+    // behalf; read access is not enough.
+    require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
     let artifact = db::artifact::get(&state.db, &artifact_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
@@ -378,7 +395,7 @@ async fn verify_signatures(
     let mut results = Vec::new();
     for sig in sigs {
         let key = db::signing::get_signing_key(&state.db, &sig.signer_key_id).await;
-        let (valid, key_name) = match key {
+        let (valid, key_name, signer) = match key {
             Ok(k) => {
                 let v = delta_registry::signing::verify_signature(
                     &k.public_key_hex,
@@ -386,13 +403,18 @@ async fn verify_signatures(
                     &sig.signature_hex,
                 )
                 .unwrap_or(false);
-                (v, k.name)
+                let signer = db::user::get_by_id(&state.db, &k.user_id)
+                    .await
+                    .ok()
+                    .map(|u| u.username);
+                (v, k.name, signer)
             }
-            Err(_) => (false, "unknown".to_string()),
+            Err(_) => (false, "unknown".to_string(), None),
         };
         results.push(delta_registry::signing::VerificationResult {
             key_id: sig.signer_key_id,
             key_name,
+            signer,
             valid,
         });
     }
@@ -521,7 +543,7 @@ async fn run_cleanup(
                 .config
                 .registry
                 .max_total_bytes_per_repo
-                .map(|b| b as i64),
+                .map(|b| i64::try_from(b).unwrap_or(i64::MAX)),
         ),
     };
 
@@ -552,8 +574,8 @@ async fn list_releases(
     Path((owner, name)): Path<(String, String)>,
     AuthUser(user): AuthUser,
 ) -> Result<Json<Vec<db::release::Release>>, (StatusCode, String)> {
-    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
-    let releases = db::release::list_for_repo(&state.db, &repo.id.to_string())
+    let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
+    let mut releases = db::release::list_for_repo(&state.db, &repo.id.to_string())
         .await
         .map_err(|e| {
             tracing::error!("failed to list releases: {}", e);
@@ -562,6 +584,13 @@ async fn list_releases(
                 "internal server error".into(),
             )
         })?;
+    // Drafts are visible only to those who can edit releases.
+    if require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write)
+        .await
+        .is_err()
+    {
+        releases.retain(|r| !r.is_draft);
+    }
     Ok(Json(releases))
 }
 
@@ -628,10 +657,18 @@ async fn get_release(
     Path((owner, name, tag)): Path<(String, String, String)>,
     AuthUser(user): AuthUser,
 ) -> Result<Json<db::release::Release>, (StatusCode, String)> {
-    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
+    let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     let release = db::release::get_by_tag(&state.db, &repo.id.to_string(), &tag)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    // Drafts are visible only to those who can edit releases.
+    if release.is_draft
+        && require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write)
+            .await
+            .is_err()
+    {
+        return Err((StatusCode::NOT_FOUND, "release not found".into()));
+    }
     Ok(Json(release))
 }
 

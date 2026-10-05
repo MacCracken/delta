@@ -25,6 +25,9 @@ pub fn router() -> Router<AppState> {
                 .delete(delete_package),
         )
         .route("/ark/{name}/{version}/meta", get(get_metadata))
+        .layer(axum::extract::DefaultBodyLimit::max(
+            crate::helpers::MAX_UPLOAD_BYTES,
+        ))
 }
 
 #[derive(Deserialize)]
@@ -44,6 +47,7 @@ fn default_limit() -> i64 {
 async fn search_packages(
     State(state): State<AppState>,
     Query(query): Query<SearchQuery>,
+    MaybeAuthUser(user): MaybeAuthUser,
 ) -> Result<Json<Vec<db::ark_package::ArkPackage>>, (StatusCode, String)> {
     if query.q.is_empty() {
         return Err((
@@ -51,7 +55,9 @@ async fn search_packages(
             "query parameter 'q' required".into(),
         ));
     }
-    let packages = db::ark_package::search(&state.db, &query.q, query.limit, query.offset)
+    let limit = query.limit.clamp(1, 100);
+    let offset = query.offset.max(0);
+    let packages = db::ark_package::search(&state.db, &query.q, limit, offset)
         .await
         .map_err(|e| {
             tracing::error!("package search failed: {}", e);
@@ -60,12 +66,15 @@ async fn search_packages(
                 "internal server error".into(),
             )
         })?;
-    Ok(Json(packages))
+    Ok(Json(
+        visible_packages(&state, packages, user.as_ref()).await,
+    ))
 }
 
 async fn list_versions(
     State(state): State<AppState>,
     Path(name): Path<String>,
+    MaybeAuthUser(user): MaybeAuthUser,
 ) -> Result<Json<Vec<db::ark_package::ArkPackage>>, (StatusCode, String)> {
     let packages = db::ark_package::list_versions(&state.db, &name)
         .await
@@ -76,17 +85,23 @@ async fn list_versions(
                 "internal server error".into(),
             )
         })?;
-    Ok(Json(packages))
+    Ok(Json(
+        visible_packages(&state, packages, user.as_ref()).await,
+    ))
 }
 
 async fn get_metadata(
     State(state): State<AppState>,
     Path((name, version)): Path<(String, String)>,
     Query(query): Query<ArchQuery>,
+    MaybeAuthUser(user): MaybeAuthUser,
 ) -> Result<Json<db::ark_package::ArkPackage>, (StatusCode, String)> {
     let pkg = db::ark_package::get_version(&state.db, &name, &version, query.arch.as_deref())
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    if !package_visible(&state, &pkg, user.as_ref()).await {
+        return Err((StatusCode::NOT_FOUND, "package not found".into()));
+    }
     Ok(Json(pkg))
 }
 
@@ -99,11 +114,15 @@ async fn download_package(
     State(state): State<AppState>,
     Path((name, version)): Path<(String, String)>,
     Query(query): Query<ArchQuery>,
-    MaybeAuthUser(_user): MaybeAuthUser,
+    MaybeAuthUser(user): MaybeAuthUser,
+    method: axum::http::Method,
 ) -> Result<(StatusCode, Vec<u8>), (StatusCode, String)> {
     let pkg = db::ark_package::get_version(&state.db, &name, &version, query.arch.as_deref())
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    if !package_visible(&state, &pkg, user.as_ref()).await {
+        return Err((StatusCode::NOT_FOUND, "package not found".into()));
+    }
 
     let artifact = db::artifact::get(&state.db, &pkg.artifact_id)
         .await
@@ -114,7 +133,10 @@ async fn download_package(
         .read(&artifact.content_hash)
         .map_err(|e| (StatusCode::NOT_FOUND, format!("blob not found: {}", e)))?;
 
-    let _ = db::artifact::increment_download(&state.db, &artifact.id).await;
+    // HEAD (served by this GET route) only probes: not a download.
+    if method != axum::http::Method::HEAD {
+        let _ = db::artifact::increment_download(&state.db, &artifact.id).await;
+    }
 
     Ok((StatusCode::OK, data))
 }
@@ -149,14 +171,38 @@ async fn publish_package(
         ));
     }
 
-    // Validate package name
-    if name.is_empty()
-        || name.len() > 128
-        || !name
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-    {
+    // Validate package name (ASCII only: no look-alike Unicode names),
+    // version, and architecture
+    if !is_valid_token(&name, 128, &['-', '_']) {
         return Err((StatusCode::BAD_REQUEST, "invalid package name".into()));
+    }
+    if !is_valid_token(&version, 64, &['.', '-', '_', '+']) {
+        return Err((StatusCode::BAD_REQUEST, "invalid package version".into()));
+    }
+    if !is_valid_token(&meta.arch, 32, &['-', '_']) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "invalid package architecture".into(),
+        ));
+    }
+
+    // A package name belongs to the user who first published it; nobody
+    // else may publish versions (or architectures) under it.
+    let existing = db::ark_package::list_versions(&state.db, &name)
+        .await
+        .map_err(|e| {
+            tracing::error!("failed to list versions: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
+    let user_id = user.id.to_string();
+    if !existing.is_empty() && !existing.iter().any(|p| p.publisher_id == user_id) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "package name is owned by another publisher".into(),
+        ));
     }
 
     // User needs at least one repo to publish to — use first repo they own
@@ -171,10 +217,15 @@ async fn publish_package(
             )
         })?;
 
-    let repo = repos.first().ok_or((
-        StatusCode::BAD_REQUEST,
-        "you must have at least one repository to publish packages".into(),
-    ))?;
+    // The package takes the visibility of this repository; prefer a public one.
+    let repo = repos
+        .iter()
+        .find(|r| r.visibility == delta_core::models::repo::Visibility::Public)
+        .or(repos.first())
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            "you must have at least one repository to publish packages".into(),
+        ))?;
 
     // Store blob
     let content_hash = state.blob_store.store(&body).map_err(|e| {
@@ -237,6 +288,55 @@ async fn publish_package(
     ))
 }
 
+/// Whether `user` (or an anonymous caller) may see a package: packages
+/// share the visibility of the repository they were published to.
+async fn package_visible(
+    state: &AppState,
+    pkg: &db::ark_package::ArkPackage,
+    user: Option<&delta_core::models::user::User>,
+) -> bool {
+    let Ok(repo) = db::repo::get_by_id(&state.db, &pkg.repo_id).await else {
+        return false;
+    };
+    if repo.visibility == delta_core::models::repo::Visibility::Public {
+        return true;
+    }
+    let Some(user) = user else {
+        return false;
+    };
+    if repo.owner == user.id.to_string() {
+        return true;
+    }
+    db::collaborator::get_role(&state.db, &pkg.repo_id, &user.id.to_string())
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+}
+
+/// Keep only the packages the caller may see.
+async fn visible_packages(
+    state: &AppState,
+    packages: Vec<db::ark_package::ArkPackage>,
+    user: Option<&delta_core::models::user::User>,
+) -> Vec<db::ark_package::ArkPackage> {
+    let mut visible = Vec::with_capacity(packages.len());
+    for pkg in packages {
+        if package_visible(state, &pkg, user).await {
+            visible.push(pkg);
+        }
+    }
+    visible
+}
+
+fn is_valid_token(value: &str, max_len: usize, extra: &[char]) -> bool {
+    !value.is_empty()
+        && value.len() <= max_len
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || extra.contains(&c))
+}
+
 #[derive(Serialize)]
 struct PublishResponse {
     package: db::ark_package::ArkPackage,
@@ -269,9 +369,16 @@ async fn delete_package(
         })?;
 
     // Also delete the artifact and blob
-    if let Ok(artifact) = db::artifact::get(&state.db, &pkg.artifact_id).await {
-        let _ = db::artifact::delete(&state.db, &artifact.id).await;
-        let _ = state.blob_store.delete(&artifact.content_hash);
+    if let Ok(artifact) = db::artifact::get(&state.db, &pkg.artifact_id).await
+        && db::artifact::delete(&state.db, &artifact.id).await.is_ok()
+        && let Err(e) = delta_registry::store::release_blob(
+            &state.db,
+            &state.blob_store,
+            &artifact.content_hash,
+        )
+        .await
+    {
+        tracing::warn!("failed to release package blob: {}", e);
     }
 
     Ok(StatusCode::NO_CONTENT)

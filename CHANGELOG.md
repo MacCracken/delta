@@ -6,6 +6,118 @@ Versioning follows [AGNOS CalVer](docs/development/versioning.md): `YYYY.M.D`.
 
 ## Unreleased
 
+### Upgrade notes
+- **Toolchain:** Rust 1.99 (edition 2024, resolver 3); the Docker builder
+  uses `rust:1.99-bookworm` and the runtime image installs
+  `ca-certificates` (reqwest now verifies against the system trust store).
+- **Behind a reverse proxy?** Set `server.trust_forwarded_for = true`,
+  otherwise every client shares the proxy's rate-limit budget. Without it,
+  `X-Forwarded-For` is ignored (it was previously trusted from anyone).
+- **Docker:** the database moved onto the `delta-data` volume
+  (`/var/lib/delta/data/delta.db`). The old path,
+  `/var/lib/delta/delta.db`, was inside the container and lost whenever
+  it was recreated; copy it into the volume before upgrading if your
+  container still has it.
+- **systemd:** the unit is now `Type=exec` without a watchdog (the server
+  never sent `READY=1`, so systemd killed and restarted it in a loop).
+- **Migrations** 016–018 run automatically. 018 enforces unique SSH key
+  fingerprints and, where the same key was registered more than once,
+  keeps only its earliest registration.
+- **Pull requests:** approvals now count only from the owner and write/admin
+  collaborators, and only for the current head commit, so open PRs
+  approved before this release need approving again.
+- Only `sqlite:` database URLs are accepted (`postgres://` URLs used to
+  create a local SQLite file silently).
+
+### Added
+- `server.trust_forwarded_for` and `server.external_url` config options
+  (the latter is used for absolute LFS transfer URLs).
+- SSH transport supports git protocol v2 and enforces branch protection;
+  pushes over SSH fire webhooks and pipelines like HTTP pushes.
+- Manually triggered pipelines (REST, workspace and MCP) actually run the
+  named workflow (by name or file name) in a checkout of the commit.
+- Audit export accepts `since`/`until` (RFC 3339 or `YYYY-MM-DD`).
+- Large files show a "view raw" notice in the web UI; raw downloads are
+  streamed.
+- Public repositories' pipeline logs stream live in the web UI.
+
+### Changed
+- Dependencies updated to their latest releases, including sqlx 0.9,
+  gix 0.88, russh 0.64, reqwest 0.13, askama 0.16, argon2 0.6,
+  ed25519-dalek 3, sha2 0.11, tower-http 0.7 and toml 1.
+- Git HTTP, LFS and SSH no longer reveal whether a private repository
+  exists: anonymous clients get a challenged 401 and authenticated
+  users without access get 404 (readers who may not push get 403).
+- The OCI `/v2/` endpoint requires credentials (so `docker login`
+  works), accepts Basic `username:token`, and serves public images
+  anonymously.
+- Text APIs answer 422 for files or diffs over their size limits (1 MiB
+  for file views/MCP/AI, 10 MiB for workspace files and diffs).
+- AI endpoints answer 502 with a generic message when the provider fails.
+- Usernames are unique regardless of case.
+- Artifact retention treats a limit of 0 as "no limit".
+- Ark package names belong to their publishers; attaching artifact
+  signatures needs write access; draft releases are visible only to
+  writers.
+
+### Fixed
+- The server panicked at startup (axum 0.8 route syntax) and crashed on
+  every restart after the first (migrations were re-run); migrations are
+  now tracked in `schema_migrations`.
+- The first registered user was never made site admin.
+- Stock git clients could not push or clone private repositories over
+  HTTP (no auth challenge), pushes over 2 MiB failed, compressed fetches
+  broke, and git processes could deadlock. Request and response bodies
+  are now streamed.
+- SSH clone/fetch never worked (git ran in stateless mode with no input).
+- Push pipelines never ran (workflows were read from the bare repo); CI
+  now runs in a temporary checkout of the pushed commit, per pushed ref.
+- Job dependencies, matrix `fail_fast`, cancellation and runner queue
+  starvation; steps that leave background processes no longer hang, and
+  timeouts keep their output.
+- Merges: the rebase strategy replayed the wrong side; merge identities
+  leaked between concurrent merges via the shared repo config.
+- Branch protection patterns with `*`/`?` and multiple matching rules.
+- Token expiry, runner reclaim and retention compared timestamps as text
+  (off by up to a day).
+- Subdirectory listings, the code-search indexer (stack overflow on
+  `docs/docs/`), blame attribution, commit stats for root commits, diff
+  rendering of lines starting with `-- `/`++ `, and log entries forged
+  through commit messages.
+- LFS hrefs were relative (git-lfs rejected them) and re-uploads failed.
+- Legacy secrets of 32+ bytes vanished from pipeline environments.
+- Federation requests timed out immediately without a `[federation]`
+  section, and mirrors were stored where nothing could find them.
+- Repository lifecycle: forks of private repos could be public, failed
+  creations left orphaned records, deleted repos stayed in the search
+  index, and expired workspaces kept their branches.
+
+### Security
+- Workspace file writes followed symlinks (arbitrary file write as the
+  server user).
+- `runs_on = "docker://--privileged"` injected container options; the
+  Landlock sandbox exposed all of `/etc` (including the server config),
+  was set up unsafely after `fork`, and seccomp could be bypassed via the
+  i386/x32 syscall ABIs.
+- Secrets leaked unmasked through live log streaming; masking could panic
+  or miss case variants.
+- Merge gates checked stale commits and counted approvals from anyone.
+- Branch protection was not enforced on pushes (HTTP or SSH).
+- Deleting an artifact deleted shared blobs used by other repositories.
+- Anyone could publish versions of someone else's ark package.
+- SSRF: IPv4-mapped IPv6, DNS names resolving to private addresses, DNS
+  rebinding and redirects bypassed the webhook/federation checks.
+- Rate limits were skipped (no peer address) or spoofable via
+  `X-Forwarded-For`; Argon2 ran on async worker threads.
+- MCP leaked private repositories and had weaker workspace checks than
+  REST; the anonymous settings page listed collaborators and rules.
+- Signing keys could not be revoked once used.
+- The SSH host key was briefly world-readable, SSH key fingerprints could
+  be registered twice, and SSH paths bypassed name validation.
+- Blob, diff and log reads were unbounded (memory exhaustion via large
+  files, diffs or commit messages).
+- AI endpoints echoed provider error bodies.
+
 ## 2026.3.16
 
 ### Added

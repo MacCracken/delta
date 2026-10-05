@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
     if cli.private {
         config.auth.enabled = true;
         config.federation.enabled = false;
-        config.server.cors_origins = vec![];
+        // (Configured CORS origins are kept: an empty list means "any origin".)
         tracing::info!("running in private instance mode");
     }
 
@@ -70,11 +70,12 @@ async fn main() -> anyhow::Result<()> {
         config.storage.db_url = format!("sqlite://{}?mode=rwc", data.join("delta.db").display());
     }
 
-    if config.auth.secrets_key == "delta-change-me-in-production"
-        || config.auth.secrets_key == "change-me-to-a-strong-random-passphrase"
-    {
+    if config.auth.secrets_key.is_empty() {
+        anyhow::bail!("auth.secrets_key must not be empty");
+    }
+    if config.auth.secrets_key_is_placeholder() {
         tracing::warn!(
-            "secrets_key is set to a default value — pipeline secrets are NOT secure. \
+            "secrets_key is set to a sample value — pipeline secrets are NOT secure. \
              Set auth.secrets_key in your config file."
         );
     }
@@ -85,9 +86,6 @@ async fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(config.storage.lfs_dir())?;
 
     let pool = db::init_pool_sized(&config.storage.db_url, config.scaling.db_pool_size).await?;
-
-    // Clone pool for SSH before moving into AppState
-    let ssh_pool = pool.clone();
 
     let state = AppState::new(config.clone(), pool);
 
@@ -137,6 +135,7 @@ async fn main() -> anyhow::Result<()> {
     // Clone rate limiters for the background cleanup task before state is consumed.
     let cleanup_limiter = state.rate_limiter.clone();
     let cleanup_auth_limiter = state.auth_rate_limiter.clone();
+    let ssh_state = state.clone();
 
     let app = routes::router(state);
 
@@ -147,15 +146,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Start SSH server if enabled
     if config.ssh.enabled {
-        let ssh_config = config.ssh.clone();
-        let ssh_repos_dir = config.storage.repos_dir.clone();
-        let ssh_host = config.server.host.clone();
-
         tokio::spawn(async move {
-            if let Err(e) =
-                delta_api::ssh::start_ssh_server(&ssh_config, ssh_pool, ssh_repos_dir, &ssh_host)
-                    .await
-            {
+            if let Err(e) = delta_api::ssh::start_ssh_server(ssh_state).await {
                 tracing::error!("SSH server error: {}", e);
             }
         });
@@ -188,7 +180,12 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    axum::serve(listener, app).await?;
+    // Peer addresses identify clients for rate limiting.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }

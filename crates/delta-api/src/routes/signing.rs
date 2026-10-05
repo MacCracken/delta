@@ -94,6 +94,15 @@ async fn delete_key(
 ) -> Result<StatusCode, (StatusCode, String)> {
     db::signing::delete_signing_key(&state.db, &key_id, &user.id.to_string())
         .await
-        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+        .map_err(|e| match e {
+            delta_core::DeltaError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            e => {
+                tracing::error!("failed to delete signing key: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal server error".into(),
+                )
+            }
+        })?;
     Ok(StatusCode::NO_CONTENT)
 }

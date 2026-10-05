@@ -397,16 +397,16 @@ async fn resolve_repo(
 // ---------------------------------------------------------------------------
 
 async fn handle_list_repos(state: &AppState, args: &serde_json::Value) -> ToolResult {
-    // Always use list_visible to exclude private repos (MCP is unauthenticated)
-    let owner_filter = if let Some(owner) = arg_str(args, "owner") {
-        let owner_id = resolve_owner(state, owner).await?;
-        Some(owner_id)
-    } else {
-        None
-    };
-    let repos = db::repo::list_visible(&state.db, owner_filter.as_deref())
+    // MCP is unauthenticated: list public repositories only. (The argument
+    // of list_visible is the *viewer*; passing the owner's id there would
+    // reveal that owner's private repositories.)
+    let mut repos = db::repo::list_visible(&state.db, None)
         .await
         .map_err(|e| error_result(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    if let Some(owner) = arg_str(args, "owner") {
+        let owner_id = resolve_owner(state, owner).await?;
+        repos.retain(|r| r.owner == owner_id);
+    }
     ok_json(&repos)
 }
 
@@ -505,9 +505,17 @@ async fn handle_read_file(state: &AppState, args: &serde_json::Value) -> ToolRes
         .repo_host
         .repo_path(owner, name)
         .map_err(|e| error_result(StatusCode::BAD_REQUEST, &e.to_string()))?;
-    let content = delta_vcs::browse::read_blob_text(&repo_path, rev, path)
-        .await
-        .map_err(|e| error_result(StatusCode::NOT_FOUND, &e.to_string()))?;
+    let content = delta_vcs::browse::read_blob_text(
+        &repo_path,
+        rev,
+        path,
+        crate::helpers::MAX_TEXT_FILE_BYTES,
+    )
+    .await
+    .map_err(|e| {
+        let (status, message) = crate::helpers::vcs_error(e, StatusCode::NOT_FOUND);
+        error_result(status, &message)
+    })?;
     ok_text(content)
 }
 
@@ -542,6 +550,80 @@ async fn authenticate_mcp(
         .map_err(|_| error_result(StatusCode::UNAUTHORIZED, "invalid or expired token"))
 }
 
+/// Resolve `owner/name` for an authenticated workspace operation. The user
+/// must own the repository or be a collaborator with write access, matching
+/// the REST workspace endpoints. Repositories the user can't write to are
+/// reported as not found.
+async fn resolve_writable_repo(
+    state: &AppState,
+    user: &delta_core::models::user::User,
+    owner: &str,
+    name: &str,
+) -> Result<delta_core::models::repo::Repository, (StatusCode, Json<McpToolResult>)> {
+    let not_found = || {
+        error_result(
+            StatusCode::NOT_FOUND,
+            &format!("repository '{owner}/{name}' not found"),
+        )
+    };
+    let owner_user = db::user::get_by_username(&state.db, owner)
+        .await
+        .map_err(|_| not_found())?;
+    let repo = db::repo::get_by_owner_and_name(&state.db, &owner_user.id.to_string(), name)
+        .await
+        .map_err(|_| not_found())?;
+    if user.id != owner_user.id {
+        let role =
+            db::collaborator::get_role(&state.db, &repo.id.to_string(), &user.id.to_string())
+                .await
+                .unwrap_or(None);
+        match role {
+            Some(r) if r.has(delta_core::models::collaborator::CollaboratorRole::Write) => {}
+            Some(_) => {
+                return Err(error_result(
+                    StatusCode::FORBIDDEN,
+                    "write access to the repository is required",
+                ));
+            }
+            None => return Err(not_found()),
+        }
+    }
+    Ok(repo)
+}
+
+/// Load a workspace of `repo` created by `user`, optionally requiring it
+/// to still be active.
+async fn resolve_own_workspace(
+    state: &AppState,
+    user: &delta_core::models::user::User,
+    repo: &delta_core::models::repo::Repository,
+    ws_id: &str,
+    require_active: bool,
+) -> Result<delta_core::models::workspace::Workspace, (StatusCode, Json<McpToolResult>)> {
+    let ws = db::workspace::get_by_id(&state.db, ws_id)
+        .await
+        .map_err(|e| error_result(StatusCode::NOT_FOUND, &e.to_string()))?;
+    if ws.repo_id != repo.id.to_string() {
+        return Err(error_result(
+            StatusCode::NOT_FOUND,
+            "workspace not found in this repository",
+        ));
+    }
+    if ws.creator_id != user.id.to_string() {
+        return Err(error_result(
+            StatusCode::FORBIDDEN,
+            "you do not own this workspace",
+        ));
+    }
+    if require_active && ws.status != delta_core::models::workspace::WorkspaceStatus::Active {
+        return Err(error_result(
+            StatusCode::CONFLICT,
+            "workspace is not active",
+        ));
+    }
+    Ok(ws)
+}
+
 async fn handle_create_workspace(state: &AppState, args: &serde_json::Value) -> ToolResult {
     let user = authenticate_mcp(state, args).await?;
     let owner = require_str(args, "owner")?;
@@ -563,36 +645,7 @@ async fn handle_create_workspace(state: &AppState, args: &serde_json::Value) -> 
         ));
     }
 
-    let owner_user = db::user::get_by_username(&state.db, owner)
-        .await
-        .map_err(|_| {
-            error_result(
-                StatusCode::NOT_FOUND,
-                &format!("user '{}' not found", owner),
-            )
-        })?;
-    let repo = db::repo::get_by_owner_and_name(&state.db, &owner_user.id.to_string(), name)
-        .await
-        .map_err(|_| {
-            error_result(
-                StatusCode::NOT_FOUND,
-                &format!("repository '{}/{}' not found", owner, name),
-            )
-        })?;
-
-    // Check access: user must be the owner or a collaborator
-    if user.id != owner_user.id {
-        let role =
-            db::collaborator::get_role(&state.db, &repo.id.to_string(), &user.id.to_string())
-                .await
-                .unwrap_or(None);
-        if role.is_none() {
-            return Err(error_result(
-                StatusCode::NOT_FOUND,
-                &format!("repository '{}/{}' not found", owner, name),
-            ));
-        }
-    }
+    let repo = resolve_writable_repo(state, &user, owner, name).await?;
 
     let ttl = ttl_hours.clamp(1, 168);
     let base = base_branch.unwrap_or(&repo.default_branch);
@@ -638,24 +691,8 @@ async fn handle_workspace_write_files(state: &AppState, args: &serde_json::Value
     let ws_id = require_str(args, "workspace_id")?;
     let message = require_str(args, "message")?;
 
-    let ws = db::workspace::get_by_id(&state.db, ws_id)
-        .await
-        .map_err(|e| error_result(StatusCode::NOT_FOUND, &e.to_string()))?;
-
-    // Verify the authenticated user created this workspace
-    if ws.creator_id != user.id.to_string() {
-        return Err(error_result(
-            StatusCode::FORBIDDEN,
-            "you do not own this workspace",
-        ));
-    }
-
-    if ws.status != delta_core::models::workspace::WorkspaceStatus::Active {
-        return Err(error_result(
-            StatusCode::CONFLICT,
-            "workspace is not active",
-        ));
-    }
+    let repo = resolve_writable_repo(state, &user, owner, name).await?;
+    let ws = resolve_own_workspace(state, &user, &repo, ws_id, true).await?;
 
     let files_val = args
         .get("files")
@@ -732,67 +769,25 @@ async fn handle_workspace_trigger_pipeline(
     let ws_id = require_str(args, "workspace_id")?;
     let workflow_name = require_str(args, "workflow_name")?;
 
-    // Look up repo directly (supports private repos for authenticated workspace users)
-    let owner_user = db::user::get_by_username(&state.db, owner)
-        .await
-        .map_err(|_| {
-            error_result(
-                StatusCode::NOT_FOUND,
-                &format!("user '{}' not found", owner),
-            )
-        })?;
-    let repo = db::repo::get_by_owner_and_name(&state.db, &owner_user.id.to_string(), name)
-        .await
-        .map_err(|_| {
-            error_result(
-                StatusCode::NOT_FOUND,
-                &format!("repository '{}/{}' not found", owner, name),
-            )
-        })?;
-
-    // Verify user is owner or collaborator
-    if user.id != owner_user.id {
-        let role =
-            db::collaborator::get_role(&state.db, &repo.id.to_string(), &user.id.to_string())
-                .await
-                .unwrap_or(None);
-        if role.is_none() {
-            return Err(error_result(
-                StatusCode::NOT_FOUND,
-                &format!("repository '{}/{}' not found", owner, name),
-            ));
-        }
-    }
-
-    let ws = db::workspace::get_by_id(&state.db, ws_id)
-        .await
-        .map_err(|e| error_result(StatusCode::NOT_FOUND, &e.to_string()))?;
-
-    if ws.creator_id != user.id.to_string() {
-        return Err(error_result(
-            StatusCode::FORBIDDEN,
-            "you do not own this workspace",
-        ));
-    }
-
-    if ws.status != delta_core::models::workspace::WorkspaceStatus::Active {
-        return Err(error_result(
-            StatusCode::CONFLICT,
-            "workspace is not active",
-        ));
-    }
+    let repo = resolve_writable_repo(state, &user, owner, name).await?;
+    let ws = resolve_own_workspace(state, &user, &repo, ws_id, true).await?;
 
     let commit_sha = ws.head_commit.as_deref().unwrap_or(&ws.base_commit);
-    let run = db::pipeline::create_pipeline(
-        &state.db,
-        &repo.id.to_string(),
+    let repo_path = state
+        .repo_host
+        .repo_path(owner, name)
+        .map_err(|e| error_result(StatusCode::BAD_REQUEST, &e.to_string()))?;
+    let run = crate::routes::pipelines::start_manual_pipeline(
+        state,
+        &repo,
+        repo_path,
         workflow_name,
         "workspace",
         Some(&ws.branch),
         commit_sha,
     )
     .await
-    .map_err(|e| error_result(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|(status, message)| error_result(status, &message))?;
 
     ok_json(&serde_json::json!({
         "pipeline_id": run.id,
@@ -813,41 +808,8 @@ async fn handle_workspace_create_pull(state: &AppState, args: &serde_json::Value
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    // Look up repo directly (supports private repos for authenticated workspace users)
-    let owner_user = db::user::get_by_username(&state.db, owner)
-        .await
-        .map_err(|_| {
-            error_result(
-                StatusCode::NOT_FOUND,
-                &format!("user '{}' not found", owner),
-            )
-        })?;
-    let repo = db::repo::get_by_owner_and_name(&state.db, &owner_user.id.to_string(), name)
-        .await
-        .map_err(|_| {
-            error_result(
-                StatusCode::NOT_FOUND,
-                &format!("repository '{}/{}' not found", owner, name),
-            )
-        })?;
-
-    // Verify user is owner or collaborator
-    if user.id != owner_user.id {
-        let role =
-            db::collaborator::get_role(&state.db, &repo.id.to_string(), &user.id.to_string())
-                .await
-                .unwrap_or(None);
-        if role.is_none() {
-            return Err(error_result(
-                StatusCode::NOT_FOUND,
-                &format!("repository '{}/{}' not found", owner, name),
-            ));
-        }
-    }
-
-    let ws = db::workspace::get_by_id(&state.db, ws_id)
-        .await
-        .map_err(|e| error_result(StatusCode::NOT_FOUND, &e.to_string()))?;
+    let repo = resolve_writable_repo(state, &user, owner, name).await?;
+    let ws = resolve_own_workspace(state, &user, &repo, ws_id, true).await?;
 
     let pr = db::pull_request::create(
         &state.db,
@@ -878,24 +840,8 @@ async fn handle_workspace_status(state: &AppState, args: &serde_json::Value) -> 
     let name = require_str(args, "name")?;
     let ws_id = require_str(args, "workspace_id")?;
 
-    let repo = resolve_repo(state, owner, name).await?;
-    let ws = db::workspace::get_by_id(&state.db, ws_id)
-        .await
-        .map_err(|e| error_result(StatusCode::NOT_FOUND, &e.to_string()))?;
-
-    if ws.repo_id != repo.id.to_string() {
-        return Err(error_result(
-            StatusCode::NOT_FOUND,
-            "workspace not found in this repository",
-        ));
-    }
-
-    if ws.creator_id != user.id.to_string() {
-        return Err(error_result(
-            StatusCode::FORBIDDEN,
-            "you do not own this workspace",
-        ));
-    }
+    let repo = resolve_writable_repo(state, &user, owner, name).await?;
+    let ws = resolve_own_workspace(state, &user, &repo, ws_id, false).await?;
 
     ok_json(&serde_json::json!({
         "id": ws.id.to_string(),

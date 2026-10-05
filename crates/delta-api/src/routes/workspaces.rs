@@ -18,6 +18,9 @@ use crate::extractors::AuthUser;
 use crate::helpers::{require_role, resolve_repo_authed};
 use crate::state::AppState;
 
+/// Largest file the workspace file API returns.
+const MAX_WORKSPACE_READ_BYTES: u64 = 10 * 1024 * 1024;
+
 /// Per-workspace lock map to prevent concurrent commit races.
 pub type WorkspaceLocks = Arc<dashmap::DashMap<String, Arc<Mutex<()>>>>;
 
@@ -37,7 +40,7 @@ pub fn router() -> Router<AppState> {
             axum::routing::post(write_files),
         )
         .route(
-            "/{owner}/{name}/workspaces/{ws_id}/files/*path",
+            "/{owner}/{name}/workspaces/{ws_id}/files/{*path}",
             get(read_file),
         )
         .route("/{owner}/{name}/workspaces/{ws_id}/tree", get(list_tree))
@@ -397,9 +400,9 @@ async fn read_file(
         .repo_path(&owner, &name)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 
-    delta_vcs::browse::read_blob_text(&repo_path, &ws.branch, &path)
+    delta_vcs::browse::read_blob_text(&repo_path, &ws.branch, &path, MAX_WORKSPACE_READ_BYTES)
         .await
-        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))
+        .map_err(|e| crate::helpers::vcs_error(e, StatusCode::NOT_FOUND))
 }
 
 async fn list_tree(
@@ -453,23 +456,21 @@ async fn trigger_pipeline(
     }
 
     let commit_sha = ws.head_commit.as_deref().unwrap_or(&ws.base_commit);
+    let repo_path = state
+        .repo_host
+        .repo_path(&owner, &name)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 
-    let run = db::pipeline::create_pipeline(
-        &state.db,
-        &repo.id.to_string(),
+    let run = crate::routes::pipelines::start_manual_pipeline(
+        &state,
+        &repo,
+        repo_path,
         &req.workflow_name,
         "workspace",
         Some(&ws.branch),
         commit_sha,
     )
-    .await
-    .map_err(|e| {
-        tracing::error!("failed to create pipeline: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal server error".into(),
-        )
-    })?;
+    .await?;
 
     Ok((StatusCode::CREATED, Json(run)))
 }
@@ -613,7 +614,7 @@ async fn diff_workspace(
 
     delta_vcs::diff::diff_refs(&repo_path, &ws.base_branch, &ws.branch)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        .map_err(|e| crate::helpers::vcs_error(e, StatusCode::INTERNAL_SERVER_ERROR))
 }
 
 /// Cleanup task: expire workspaces past their TTL.
@@ -624,35 +625,46 @@ pub async fn cleanup_expired_workspaces(
 ) {
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+        expire_workspaces(&db, &repo_host, &workspace_locks).await;
+    }
+}
 
-        let expired = match db::workspace::list_expired(&db).await {
-            Ok(ws) => ws,
-            Err(e) => {
-                tracing::error!("workspace cleanup: failed to list expired: {}", e);
-                continue;
-            }
-        };
-
-        for ws in expired {
-            tracing::info!(
-                workspace_id = %ws.id,
-                branch = %ws.branch,
-                "expiring workspace"
-            );
-
-            // Try to resolve repo for branch deletion
-            if let Ok(repo) = db::repo::get_by_id(&db, &ws.repo_id).await
-                && let Ok(repo_path) = repo_host.repo_path(&repo.owner, &repo.name)
-            {
-                let _ = delta_vcs::workspace::delete_workspace_branch(&repo_path, &ws.branch).await;
-                let _ = delta_vcs::workspace::prune_worktrees(&repo_path).await;
-            }
-
-            let _ = db::workspace::update_status(&db, &ws.id.to_string(), WorkspaceStatus::Expired)
-                .await;
-
-            // Clean up the per-workspace lock entry from the DashMap
-            workspace_locks.remove(&ws.id.to_string());
+/// Expire every active workspace past its TTL: delete its branch, prune
+/// its worktrees and mark it expired.
+pub async fn expire_workspaces(
+    db: &sqlx::SqlitePool,
+    repo_host: &delta_vcs::RepoHost,
+    workspace_locks: &WorkspaceLocks,
+) {
+    let expired = match db::workspace::list_expired(db).await {
+        Ok(ws) => ws,
+        Err(e) => {
+            tracing::error!("workspace cleanup: failed to list expired: {}", e);
+            return;
         }
+    };
+
+    for ws in expired {
+        tracing::info!(
+            workspace_id = %ws.id,
+            branch = %ws.branch,
+            "expiring workspace"
+        );
+
+        // Try to resolve repo for branch deletion. (`repo.owner` holds the
+        // owner's id; repositories live under the owner's username.)
+        if let Ok(repo) = db::repo::get_by_id(db, &ws.repo_id).await
+            && let Ok(owner) = db::user::get_by_id(db, &repo.owner).await
+            && let Ok(repo_path) = repo_host.repo_path(&owner.username, &repo.name)
+        {
+            let _ = delta_vcs::workspace::delete_workspace_branch(&repo_path, &ws.branch).await;
+            let _ = delta_vcs::workspace::prune_worktrees(&repo_path).await;
+        }
+
+        let _ =
+            db::workspace::update_status(db, &ws.id.to_string(), WorkspaceStatus::Expired).await;
+
+        // Clean up the per-workspace lock entry from the DashMap
+        workspace_locks.remove(&ws.id.to_string());
     }
 }

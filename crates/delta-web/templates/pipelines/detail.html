@@ -131,9 +131,11 @@ function connectWs() {
   wsStatus.className = 'ws-status ws-connecting';
 
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  // Use cookie or localStorage token — adjust based on your auth flow
-  const token = localStorage.getItem('delta_token') || '';
-  const wsUrl = proto + '//' + location.host + '/api/v1/repos/{{ owner }}/{{ repo }}/pipelines/' + pipelineId + '/ws?token=' + encodeURIComponent(token);
+  // Public pipelines stream without credentials; a stored API token (if
+  // any) is sent for completeness.
+  const token = localStorage.getItem('delta_token');
+  const wsUrl = proto + '//' + location.host + '/api/v1/repos/{{ owner }}/{{ repo }}/pipelines/' + pipelineId + '/ws'
+    + (token ? '?token=' + encodeURIComponent(token) : '');
   const ws = new WebSocket(wsUrl);
 
   ws.onopen = function() {

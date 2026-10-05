@@ -7,6 +7,11 @@ port = 8070
 api_prefix = "/api/v1"
 # Restrict CORS origins in production (empty = allow any)
 cors_origins = ["https://delta.example.com"]
+# Set to true only behind a reverse proxy that appends X-Forwarded-For;
+# clients are then identified (for rate limiting) by the proxy-added entry.
+# trust_forwarded_for = false
+# Public base URL, used for absolute links handed to clients (Git LFS).
+# external_url = "https://delta.example.com"
 
 [storage]
 repos_dir = "/var/lib/delta/repos"

@@ -17,12 +17,17 @@ pub fn router() -> Router<AppState> {
     Router::new()
         // Repository browsing
         .route("/{owner}/{repo}", get(repo_root))
+        .route("/{owner}/{repo}/", get(repo_root))
         .route("/{owner}/{repo}/-/tree/{rev}", get(repo_tree_root))
+        // `{*path}` never matches an empty tail, so trailing slashes need
+        // routes of their own.
+        .route("/{owner}/{repo}/-/tree/{rev}/", get(repo_tree_root))
         .route("/{owner}/{repo}/-/tree/{rev}/{*path}", get(repo_tree))
         .route("/{owner}/{repo}/-/blob/{rev}/{*path}", get(repo_blob))
         .route("/{owner}/{repo}/-/raw/{rev}/{*path}", get(repo_raw))
         .route("/{owner}/{repo}/-/blame/{rev}/{*path}", get(repo_blame))
         .route("/{owner}/{repo}/-/commits/{rev}", get(repo_commits))
+        .route("/{owner}/{repo}/-/commits/{rev}/", get(repo_commits))
         .route(
             "/{owner}/{repo}/-/commits/{rev}/{*path}",
             get(repo_commits_path),
@@ -193,6 +198,22 @@ async fn repo_tree(
     render_tree(&state, &owner, &repo, &rev, &path).await
 }
 
+/// Split the `{rev}/{*path}` tail of a URL into a revision and a path.
+/// Branch and tag names may contain slashes (`feature/x`), so the longest
+/// leading part that names a branch or tag is the revision.
+fn split_rev_path(repo_path: &std::path::Path, rev: &str, path: &str) -> (String, String) {
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    for take in (1..=segments.len()).rev() {
+        let candidate = format!("{rev}/{}", segments[..take].join("/"));
+        if ["refs/heads/", "refs/tags/"].iter().any(|prefix| {
+            delta_vcs::refs::ref_target(repo_path, &format!("{prefix}{candidate}")).is_some()
+        }) {
+            return (candidate, segments[take..].join("/"));
+        }
+    }
+    (rev.to_string(), segments.join("/"))
+}
+
 async fn render_tree(
     state: &AppState,
     owner: &str,
@@ -201,6 +222,8 @@ async fn render_tree(
     path: &str,
 ) -> WebResult {
     let (repo_path, _repo_id) = resolve_repo_path(state, owner, repo).await?;
+    let (rev, path) = split_rev_path(&repo_path, rev, path);
+    let (rev, path) = (rev.as_str(), path.as_str());
 
     // Check if repo is empty
     let head = delta_vcs::refs::head_commit(&repo_path);
@@ -249,9 +272,14 @@ async fn render_tree(
         } else {
             format!("{}/README.md", path.trim_end_matches('/'))
         };
-        delta_vcs::browse::read_blob_text(&repo_path, rev, &readme_path)
-            .await
-            .ok()
+        delta_vcs::browse::read_blob_text(
+            &repo_path,
+            rev,
+            &readme_path,
+            crate::helpers::MAX_TEXT_FILE_BYTES,
+        )
+        .await
+        .ok()
     };
 
     let path_parts = build_path_parts(owner, repo, rev, path);
@@ -276,13 +304,28 @@ async fn repo_blob(
     Path((owner, repo, rev, path)): Path<(String, String, String, String)>,
 ) -> WebResult {
     let (repo_path, _) = resolve_repo_path(&state, &owner, &repo).await?;
+    let (rev, path) = split_rev_path(&repo_path, &rev, &path);
 
-    let content = delta_vcs::browse::read_blob_text(&repo_path, &rev, &path)
+    let size = delta_vcs::browse::blob_size(&repo_path, &rev, &path)
         .await
         .map_err(|e| not_found(&format!("file not found: {}", e)))?;
+    // Large files are offered raw instead of rendered.
+    let too_large = size > crate::helpers::MAX_TEXT_FILE_BYTES;
+    let content = if too_large {
+        String::new()
+    } else {
+        delta_vcs::browse::read_blob_text(
+            &repo_path,
+            &rev,
+            &path,
+            crate::helpers::MAX_TEXT_FILE_BYTES,
+        )
+        .await
+        .map_err(|e| not_found(&format!("file not found: {}", e)))?
+    };
 
     let line_count = content.lines().count();
-    let size_display = format_size(content.len());
+    let size_display = format_size(usize::try_from(size).unwrap_or(usize::MAX));
     let filename = path.rsplit('/').next().unwrap_or(&path).to_string();
     let path_parts = build_path_parts(&owner, &repo, &rev, &path);
     let branches = delta_vcs::refs::list_branches(&repo_path)
@@ -299,6 +342,7 @@ async fn repo_blob(
         path_parts,
         filename,
         content,
+        too_large,
         line_count,
         size_display,
         branches,
@@ -312,15 +356,32 @@ async fn repo_raw(
     Path((owner, repo, rev, path)): Path<(String, String, String, String)>,
 ) -> WebResult {
     let (repo_path, _) = resolve_repo_path(&state, &owner, &repo).await?;
+    let (rev, path) = split_rev_path(&repo_path, &rev, &path);
 
-    let bytes = delta_vcs::browse::read_blob(&repo_path, &rev, &path)
+    // Checks the path names a file; then stream it, whatever its size.
+    delta_vcs::browse::blob_size(&repo_path, &rev, &path)
         .await
         .map_err(|e| not_found(&format!("file not found: {}", e)))?;
+    let mut child = delta_vcs::browse::spawn_blob_reader(&repo_path, &rev, &path)
+        .map_err(|e| internal_err(&e.to_string()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| internal_err("git stdout unavailable"))?;
+    // Reap git once it is done; it exits early if the client goes away.
+    tokio::spawn(async move {
+        let _ = child.wait().await;
+    });
 
     Ok((
         StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/octet-stream")],
-        bytes,
+        [
+            (header::CONTENT_TYPE, "application/octet-stream"),
+            // User content on this origin: never sniffed or run as a page.
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::CONTENT_SECURITY_POLICY, "sandbox"),
+        ],
+        axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(stdout)),
     )
         .into_response())
 }
@@ -330,10 +391,18 @@ async fn repo_blame(
     Path((owner, repo, rev, path)): Path<(String, String, String, String)>,
 ) -> WebResult {
     let (repo_path, _) = resolve_repo_path(&state, &owner, &repo).await?;
+    let (rev, path) = split_rev_path(&repo_path, &rev, &path);
 
-    let blame_lines = delta_vcs::browse::blame(&repo_path, &rev, &path)
-        .await
-        .map_err(|e| not_found(&format!("blame failed: {}", e)))?;
+    let blame_lines =
+        delta_vcs::browse::blame(&repo_path, &rev, &path, crate::helpers::MAX_TEXT_FILE_BYTES)
+            .await
+            .map_err(|e| match e {
+                delta_core::DeltaError::TooLarge(_) => (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "file is too large to blame".to_string(),
+                ),
+                e => not_found(&format!("blame failed: {}", e)),
+            })?;
 
     let filename = path.rsplit('/').next().unwrap_or(&path).to_string();
     let path_parts = build_path_parts(&owner, &repo, &rev, &path);
@@ -390,6 +459,8 @@ async fn render_commits(
     path: Option<&str>,
 ) -> WebResult {
     let (repo_path, _) = resolve_repo_path(state, owner, repo).await?;
+    let (rev, path) = split_rev_path(&repo_path, rev, path.unwrap_or(""));
+    let (rev, path) = (rev.as_str(), Some(path.as_str()).filter(|p| !p.is_empty()));
 
     let log_entries = delta_vcs::browse::log(&repo_path, rev, path, 100)
         .await
@@ -440,7 +511,11 @@ async fn repo_commit(
         .collect();
 
     // Render diff HTML with syntax-highlighted lines
-    let diff_html = render_diff_html(&detail.diff, &owner, &repo);
+    let diff_html = if detail.diff_truncated {
+        "<div class=\"empty-state\"><p>This diff is too large to display.</p></div>".to_string()
+    } else {
+        render_diff_html(&detail.diff, &owner, &repo)
+    };
 
     let commit = delta_web::repo::CommitDetailDisplay {
         sha: detail.sha,
@@ -476,10 +551,13 @@ fn render_diff_html(diff: &str, _owner: &str, _repo: &str) -> String {
     use std::fmt::Write;
     let mut html = String::new();
 
-    let mut current_file: Option<String> = None;
     let mut old_line: usize = 0;
     let mut new_line: usize = 0;
     let mut in_file = false;
+    // Between a file's `diff --git` line and its first hunk. Only there do
+    // lines like `--- a/x` belong to the header: inside a hunk, `--- x` is
+    // a removed line whose content starts with "-- ".
+    let mut in_header = false;
 
     for line in diff.lines() {
         if let Some(rest) = line.strip_prefix("diff --git ") {
@@ -494,8 +572,8 @@ fn render_diff_html(diff: &str, _owner: &str, _repo: &str) -> String {
                 .nth(1)
                 .unwrap_or(rest.trim_start_matches("a/"));
 
-            current_file = Some(file_path.to_string());
             in_file = true;
+            in_header = true;
 
             let _ = write!(
                 html,
@@ -507,22 +585,12 @@ fn render_diff_html(diff: &str, _owner: &str, _repo: &str) -> String {
             continue;
         }
 
-        if line.starts_with("index ")
-            || line.starts_with("--- ")
-            || line.starts_with("+++ ")
-            || line.starts_with("new file")
-            || line.starts_with("deleted file")
-            || line.starts_with("old mode")
-            || line.starts_with("new mode")
-            || line.starts_with("similarity index")
-            || line.starts_with("rename from")
-            || line.starts_with("rename to")
-            || line.starts_with("Binary files")
-        {
+        if !in_file {
             continue;
         }
 
         if line.starts_with("@@") {
+            in_header = false;
             // Parse hunk header: @@ -old,count +new,count @@
             if let Some((old, new)) = parse_hunk_header(line) {
                 old_line = old;
@@ -537,7 +605,17 @@ fn render_diff_html(diff: &str, _owner: &str, _repo: &str) -> String {
             continue;
         }
 
-        if current_file.is_none() {
+        if in_header {
+            // Mode changes, renames and `index`/`---`/`+++` lines are
+            // header details; binary changes have no hunks to show.
+            if line.starts_with("Binary files") {
+                let _ = write!(
+                    html,
+                    "<tr><td class=\"line-num-old\"></td><td class=\"line-num-new\"></td>\
+                     <td class=\"diff-line diff-ctx\">{}</td></tr>",
+                    escape_html(line)
+                );
+            }
             continue;
         }
 
@@ -559,6 +637,14 @@ fn render_diff_html(diff: &str, _owner: &str, _repo: &str) -> String {
                 escape_html(rest)
             );
             old_line += 1;
+        } else if line.starts_with('\\') {
+            // "\ No newline at end of file": a note, not a line of the file.
+            let _ = write!(
+                html,
+                "<tr><td class=\"line-num-old\"></td><td class=\"line-num-new\"></td>\
+                 <td class=\"diff-line diff-hunk\">{}</td></tr>",
+                escape_html(line)
+            );
         } else {
             // Context line (starts with space or is empty)
             let content = line.strip_prefix(' ').unwrap_or(line);
@@ -817,9 +903,13 @@ async fn pull_detail(
             .repo_host
             .repo_path(&owner, &repo)
             .map_err(|e| internal_err(&e.to_string()))?;
-        delta_vcs::diff::diff_refs(&repo_path, &pr.base_branch, &pr.head_branch)
-            .await
-            .unwrap_or_default()
+        match delta_vcs::diff::diff_refs(&repo_path, &pr.base_branch, &pr.head_branch).await {
+            Ok(diff) => diff,
+            Err(delta_core::DeltaError::TooLarge(_)) => {
+                "This diff is too large to display.".to_string()
+            }
+            Err(_) => String::new(),
+        }
     } else {
         String::new()
     };
@@ -920,7 +1010,6 @@ async fn repo_settings(
 ) -> WebResult {
     let repo_record = resolve_public_repo(&state, &owner, &repo).await?;
 
-    let repo_id = repo_record.id.to_string();
     let repo_path = state
         .repo_host
         .repo_path(&owner, &repo)
@@ -932,34 +1021,6 @@ async fn repo_settings(
         .map(|b| b.name)
         .collect();
 
-    // Collaborators
-    let raw_collabs = db::collaborator::list_for_repo(&state.db, &repo_id)
-        .await
-        .unwrap_or_default();
-    let mut collaborators = Vec::new();
-    for c in &raw_collabs {
-        let username = db::user::get_by_id(&state.db, &c.user_id.to_string())
-            .await
-            .map(|u| u.username)
-            .unwrap_or_else(|_| "unknown".into());
-        collaborators.push(delta_web::settings::CollaboratorEntry {
-            username,
-            role: format!("{:?}", c.role).to_lowercase(),
-        });
-    }
-
-    // Branch protections
-    let raw_protections = db::branch_protection::list_for_repo(&state.db, &repo_id)
-        .await
-        .unwrap_or_default();
-    let protections: Vec<delta_web::settings::ProtectionEntry> = raw_protections
-        .into_iter()
-        .map(|p| delta_web::settings::ProtectionEntry {
-            branch_pattern: p.pattern,
-            required_approvals: p.required_approvals,
-        })
-        .collect();
-
     let page = delta_web::settings::RepoSettingsPage {
         owner,
         repo,
@@ -967,9 +1028,40 @@ async fn repo_settings(
         visibility: repo_record.visibility.as_str().to_string(),
         default_branch: repo_record.default_branch,
         branches,
-        collaborators,
-        protections,
     };
 
     Ok(render_template(page))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diff_renders_content_that_looks_like_headers() {
+        let diff = "diff --git a/q.sql b/q.sql\n\
+                    index 1111111..2222222 100644\n\
+                    --- a/q.sql\n\
+                    +++ b/q.sql\n\
+                    @@ -1,2 +1,2 @@\n\
+                    --- drop the audit trigger\n\
+                    +++ counter\n \
+                    select 1;\n\
+                    \\ No newline at end of file\n";
+        let html = render_diff_html(diff, "o", "r");
+        // The removed "-- drop..." and added "++ counter" lines are shown...
+        assert!(
+            html.contains("diff-del\">--- drop the audit trigger"),
+            "{html}"
+        );
+        assert!(html.contains("diff-add\">+++ counter"), "{html}");
+        // ...while the file header lines are not.
+        assert!(!html.contains("a/q.sql"), "{html}");
+        assert!(!html.contains("index 1111111"), "{html}");
+        // The context line keeps its numbers; the marker is not a line.
+        assert!(
+            html.contains("<td class=\"line-num-old\">2</td><td class=\"line-num-new\">2</td>")
+        );
+        assert!(html.contains("No newline at end of file"));
+    }
 }

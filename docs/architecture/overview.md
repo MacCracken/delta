@@ -34,13 +34,15 @@ Git-compatible version control backend. Manages bare repositories on disk and im
 
 - `RepoHost` — bare repo lifecycle (init, delete, list)
 - Smart HTTP transport (info/refs, upload-pack, receive-pack)
-- SSH transport (planned)
+- Processes behind the SSH transport (served by `delta-api`'s built-in SSH server)
 - Uses `gix` (gitoxide) for git operations
 
 ### delta-api
 HTTP API server built on `axum`. The primary interface for clients, agents, and the web UI.
 
 - REST endpoints for all platform operations
+- Git over smart HTTP and SSH (`[ssh] enabled = true`; public-key auth, same
+  access rules, branch protection and push events on both transports)
 - Binary entry point: `delta-api`
 - Default port: 8070
 - Configurable CORS origins (defaults to allow-any with a startup warning)
@@ -70,7 +72,7 @@ Browser-based frontend for repository browsing, code review, CI dashboards, and 
 |-----------|--------|
 | Language | Rust (edition 2024) |
 | HTTP | axum |
-| Database | SQLite (dev) / Postgres (prod) via sqlx |
+| Database | SQLite via sqlx |
 | Git | gix (gitoxide) |
 | Content hash | BLAKE3 |
 | Serialization | serde, serde_json, toml |

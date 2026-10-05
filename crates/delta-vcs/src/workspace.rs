@@ -86,12 +86,16 @@ pub async fn commit_workspace_files(
     // Add worktree at the workspace branch
     run_git(repo_path, &["worktree", "add", worktree_str, branch_name]).await?;
 
-    // Set author info
-    run_git_in(&worktree_path, &["config", "user.name", author_name]).await?;
-    run_git_in(&worktree_path, &["config", "user.email", author_email]).await?;
-
-    // Write/delete files
-    let result = write_and_commit(&worktree_path, files, message).await;
+    // Write/delete files. The author is passed to `git commit` directly:
+    // `git config` in a linked worktree would write the shared repository
+    // config, racing with other workspaces of the same repository.
+    let identity = [
+        ("GIT_AUTHOR_NAME", author_name),
+        ("GIT_AUTHOR_EMAIL", author_email),
+        ("GIT_COMMITTER_NAME", author_name),
+        ("GIT_COMMITTER_EMAIL", author_email),
+    ];
+    let result = write_and_commit(&worktree_path, files, message, &identity).await;
 
     // Get HEAD SHA before cleanup (only if commit succeeded)
     let sha = match result {
@@ -122,10 +126,16 @@ pub async fn prune_worktrees(repo_path: &Path) -> Result<()> {
 
 // --- Internal helpers ---
 
-async fn write_and_commit(worktree: &Path, files: &[FileWrite], message: &str) -> Result<()> {
+async fn write_and_commit(
+    worktree: &Path,
+    files: &[FileWrite],
+    message: &str,
+    identity: &[(&str, &str)],
+) -> Result<()> {
     for f in files {
         if let Some(ref content) = f.content {
             // Write file
+            ensure_no_symlinks(worktree, &f.path).await?;
             let file_path = worktree.join(&f.path);
             if let Some(parent) = file_path.parent() {
                 tokio::fs::create_dir_all(parent)
@@ -142,7 +152,29 @@ async fn write_and_commit(worktree: &Path, files: &[FileWrite], message: &str) -
         }
     }
 
-    run_git_in(worktree, &["commit", "-m", message]).await
+    run_git_env(worktree, &["commit", "-m", message], identity).await
+}
+
+/// Refuse to write through a symbolic link. The checked-out branch may
+/// contain symlinks pointing anywhere on the host, and following one would
+/// write outside the worktree.
+async fn ensure_no_symlinks(worktree: &Path, rel_path: &str) -> Result<()> {
+    let mut current = worktree.to_path_buf();
+    for component in rel_path.split('/').filter(|c| !c.is_empty() && *c != ".") {
+        current.push(component);
+        match tokio::fs::symlink_metadata(&current).await {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(DeltaError::InvalidRef(format!(
+                    "file path '{rel_path}' passes through a symbolic link"
+                )));
+            }
+            Ok(_) => {}
+            // Missing components are created as plain directories/files.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(DeltaError::Storage(format!("stat failed: {}", e))),
+        }
+    }
+    Ok(())
 }
 
 fn validate_author(name: &str, email: &str) -> Result<()> {
@@ -189,6 +221,13 @@ fn validate_file_path(path: &str) -> Result<()> {
                 "file path must not contain '..' components".into(),
             ));
         }
+        // `.git` in a linked worktree is a file naming the repository that
+        // git operates on; overwriting it would redirect later commands.
+        if component.eq_ignore_ascii_case(".git") {
+            return Err(DeltaError::InvalidRef(
+                "file path must not contain '.git' components".into(),
+            ));
+        }
     }
     Ok(())
 }
@@ -213,8 +252,13 @@ async fn run_git(repo_path: &Path, args: &[&str]) -> Result<()> {
 }
 
 async fn run_git_in(worktree: &Path, args: &[&str]) -> Result<()> {
+    run_git_env(worktree, args, &[]).await
+}
+
+async fn run_git_env(worktree: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<()> {
     let output = Command::new("git")
         .args(args)
+        .envs(env.iter().copied())
         .current_dir(worktree)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

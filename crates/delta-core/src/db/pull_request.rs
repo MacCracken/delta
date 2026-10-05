@@ -290,26 +290,29 @@ pub async fn delete_comment(pool: &SqlitePool, id: &str) -> Result<()> {
 
 // --- Reviews ---
 
+/// Record a review of the PR's head at `commit_sha`.
 pub async fn submit_review(
     pool: &SqlitePool,
     pr_id: &str,
     reviewer_id: &str,
     state: ReviewState,
     body: Option<&str>,
+    commit_sha: Option<&str>,
 ) -> Result<PrReview> {
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     let state_str = state.as_str().to_string();
 
     sqlx::query(
-        "INSERT INTO pr_reviews (id, pr_id, reviewer_id, state, body, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO pr_reviews (id, pr_id, reviewer_id, state, body, commit_sha, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(pr_id)
     .bind(reviewer_id)
     .bind(&state_str)
     .bind(body)
+    .bind(commit_sha)
     .bind(&now)
     .execute(pool)
     .await
@@ -337,20 +340,33 @@ pub async fn list_reviews(pool: &SqlitePool, pr_id: &str) -> Result<Vec<PrReview
 }
 
 /// Count approvals for a PR (only the latest review per reviewer counts).
-pub async fn count_approvals(pool: &SqlitePool, pr_id: &str) -> Result<u32> {
+/// Count reviewers whose latest review approves the PR at `head_sha`.
+///
+/// Only reviewers who can write to the repository (its owner, or write/admin
+/// collaborators) count, never the PR author, and approvals of an earlier
+/// head commit are ignored.
+pub async fn count_approvals(pool: &SqlitePool, pr_id: &str, head_sha: &str) -> Result<u32> {
     let row: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM (
-             SELECT reviewer_id
-             FROM pr_reviews r1
-             WHERE r1.pr_id = ?
-               AND r1.state = 'approved'
-               AND r1.created_at = (
-                   SELECT MAX(r2.created_at) FROM pr_reviews r2
-                   WHERE r2.pr_id = r1.pr_id AND r2.reviewer_id = r1.reviewer_id
-               )
-         )",
+        "SELECT COUNT(DISTINCT r1.reviewer_id)
+         FROM pr_reviews r1
+         JOIN pull_requests p ON p.id = r1.pr_id
+         JOIN repositories repo ON repo.id = p.repo_id
+         WHERE r1.pr_id = ?
+           AND r1.state = 'approved'
+           AND r1.commit_sha = ?
+           AND r1.reviewer_id != p.author_id
+           AND r1.created_at = (
+               SELECT MAX(r2.created_at) FROM pr_reviews r2
+               WHERE r2.pr_id = r1.pr_id AND r2.reviewer_id = r1.reviewer_id
+           )
+           AND (r1.reviewer_id = repo.owner_id OR EXISTS (
+               SELECT 1 FROM repository_collaborators c
+               WHERE c.repo_id = repo.id AND c.user_id = r1.reviewer_id
+                 AND c.role IN ('write', 'admin')
+           ))",
     )
     .bind(pr_id)
+    .bind(head_sha)
     .fetch_one(pool)
     .await
     .map_err(|e| DeltaError::Storage(e.to_string()))?;
