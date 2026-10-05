@@ -172,7 +172,7 @@ fn default_daimon_url() -> String {
     "http://localhost:8090".into()
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FederationConfig {
     /// Enable federation with other Delta instances.
     #[serde(default)]
@@ -190,6 +190,19 @@ pub struct FederationConfig {
 
 fn default_federation_timeout() -> u64 {
     30
+}
+
+// Not derived: a derived Default would give `timeout_secs = 0` (instant
+// timeouts) whenever the `[federation]` table is omitted.
+impl Default for FederationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            instance_url: None,
+            instance_name: None,
+            timeout_secs: default_federation_timeout(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

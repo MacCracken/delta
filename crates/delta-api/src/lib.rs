@@ -4,4 +4,5 @@ pub mod helpers;
 pub mod middleware;
 pub mod routes;
 pub mod ssh;
+pub mod ssrf;
 pub mod state;

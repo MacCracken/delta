@@ -457,55 +457,6 @@ async fn authenticate_git_user(
     Ok(user)
 }
 
-/// Check if a host is in the 172.16.0.0/12 private range (172.16.x - 172.31.x).
-fn is_private_172(host: &str) -> bool {
-    if let Some(rest) = host.strip_prefix("172.")
-        && let Some(octet_str) = rest.split('.').next()
-        && let Ok(octet) = octet_str.parse::<u8>()
-    {
-        return (16..=31).contains(&octet);
-    }
-    false
-}
-
-/// Check if a URL targets a private/internal network (SSRF protection).
-pub fn is_private_url(url_str: &str) -> bool {
-    let Ok(url) = url::Url::parse(url_str) else {
-        return true; // Reject unparseable URLs
-    };
-    let Some(host) = url.host_str() else {
-        return true;
-    };
-    let h = host.trim_start_matches('[').trim_end_matches(']');
-
-    // Check IPv4-mapped IPv6 addresses (e.g. ::ffff:127.0.0.1)
-    if let Some(ipv4_part) = h.strip_prefix("::ffff:") {
-        // Re-check the extracted IPv4 portion
-        return ipv4_part == "localhost"
-            || ipv4_part.starts_with("127.")
-            || ipv4_part == "0.0.0.0"
-            || ipv4_part.starts_with("10.")
-            || ipv4_part.starts_with("192.168.")
-            || ipv4_part.starts_with("169.254.")
-            || is_private_172(ipv4_part);
-    }
-
-    h == "localhost"
-        || h.starts_with("127.")
-        || h == "::1"
-        || h == "::"
-        || h == "0.0.0.0"
-        || h.starts_with("10.")
-        || h.starts_with("192.168.")
-        || h.starts_with("169.254.")
-        || h.starts_with("fe80:")
-        || h.starts_with("fc00:")
-        || h.starts_with("fd")
-        || is_private_172(h)
-        || h.ends_with(".local")
-        || h.ends_with(".internal")
-}
-
 /// Fire webhooks and CI pipelines for the ref updates a push applied.
 async fn dispatch_push_events(
     state: &AppState,
@@ -572,12 +523,6 @@ async fn dispatch_push_webhooks(
         "timestamp": chrono::Utc::now().to_rfc3339(),
     });
     let payload_str = serde_json::to_string(&payload)?;
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| delta_core::DeltaError::Storage(format!("HTTP client error: {e}")))?;
-
     for webhook in webhooks {
         // Validate webhook URL: must be HTTP(S) and not target private networks
         if !webhook.url.starts_with("https://") && !webhook.url.starts_with("http://") {
@@ -588,10 +533,18 @@ async fn dispatch_push_webhooks(
             tracing::warn!(webhook_id = %webhook.id, "skipping non-HTTPS webhook (https_only enabled)");
             continue;
         }
-        if is_private_url(&webhook.url) {
-            tracing::warn!(webhook_id = %webhook.id, "skipping webhook targeting private network");
-            continue;
-        }
+        // Resolve and vet the target now (not just when the webhook was
+        // created) and pin the connection to the vetted addresses.
+        let client =
+            match crate::ssrf::guarded_client(&webhook.url, std::time::Duration::from_secs(10))
+                .await
+            {
+                Ok(client) => client,
+                Err(e) => {
+                    tracing::warn!(webhook_id = %webhook.id, "skipping webhook: {}", e);
+                    continue;
+                }
+            };
 
         // Compute HMAC signature if webhook has a secret
         let signature = webhook.secret.as_deref().map(|secret| {
@@ -615,8 +568,11 @@ async fn dispatch_push_webhooks(
         let (status, body) = match resp {
             Ok(r) => {
                 let status = r.status().as_u16() as i32;
-                let body = r.text().await.unwrap_or_else(|e| e.to_string());
-                (Some(status), Some(body))
+                let body = crate::ssrf::read_capped(r, 64 * 1024).await;
+                (
+                    Some(status),
+                    Some(String::from_utf8_lossy(&body).into_owned()),
+                )
             }
             Err(e) => {
                 tracing::warn!(webhook_id = %webhook.id, "webhook delivery failed: {}", e);
@@ -765,119 +721,5 @@ mod tests {
     #[test]
     fn test_parse_repo_name_double_git() {
         assert_eq!(parse_repo_name("my.git.git"), "my.git");
-    }
-
-    #[test]
-    fn test_is_private_url_localhost() {
-        assert!(is_private_url("http://localhost/webhook"));
-        assert!(is_private_url("http://localhost:8080/hook"));
-    }
-    #[test]
-    fn test_is_private_url_loopback() {
-        assert!(is_private_url("http://127.0.0.1/hook"));
-        assert!(is_private_url("http://127.0.0.1:3000/hook"));
-    }
-    #[test]
-    fn test_is_private_url_ipv6_loopback() {
-        assert!(is_private_url("http://[::1]/hook"));
-    }
-    #[test]
-    fn test_is_private_url_zero_addr() {
-        assert!(is_private_url("http://0.0.0.0/hook"));
-    }
-    #[test]
-    fn test_is_private_url_rfc1918() {
-        assert!(is_private_url("http://10.0.0.1/hook"));
-        assert!(is_private_url("http://10.255.255.255/hook"));
-        assert!(is_private_url("http://192.168.1.1/hook"));
-        assert!(is_private_url("http://192.168.0.100/hook"));
-    }
-    #[test]
-    fn test_is_private_url_172_range() {
-        assert!(is_private_url("http://172.16.0.1/hook"));
-        assert!(is_private_url("http://172.31.255.255/hook"));
-        assert!(!is_private_url("http://172.15.0.1/hook"));
-        assert!(!is_private_url("http://172.32.0.1/hook"));
-    }
-    #[test]
-    fn test_is_private_url_link_local() {
-        assert!(is_private_url("http://169.254.1.1/hook"));
-    }
-    #[test]
-    fn test_is_private_url_ipv6_private() {
-        assert!(is_private_url("http://[fe80::1]/hook"));
-        assert!(is_private_url("http://[fc00::1]/hook"));
-        assert!(is_private_url("http://[fd12::1]/hook"));
-    }
-    #[test]
-    fn test_is_private_url_mdns_and_internal() {
-        assert!(is_private_url("http://myhost.local/hook"));
-        assert!(is_private_url("http://service.internal/hook"));
-    }
-    #[test]
-    fn test_is_private_url_public() {
-        assert!(!is_private_url("https://example.com/hook"));
-        assert!(!is_private_url("https://api.github.com/webhook"));
-        assert!(!is_private_url("http://8.8.8.8/hook"));
-    }
-    #[test]
-    fn test_is_private_url_unparseable() {
-        assert!(is_private_url("not-a-url"));
-        assert!(is_private_url(""));
-    }
-    #[test]
-    fn test_is_private_172_edge_cases() {
-        assert!(is_private_172("172.16.0.1"));
-        assert!(is_private_172("172.31.255.255"));
-        assert!(!is_private_172("172.15.0.1"));
-        assert!(!is_private_172("172.32.0.1"));
-        assert!(!is_private_172("173.16.0.1"));
-        assert!(!is_private_172("172.abc.0.1"));
-        assert!(!is_private_172("not-an-ip"));
-    }
-
-    #[test]
-    fn test_is_private_url_loopback_variants() {
-        // 127.0.0.2 and 127.255.255.255 are in the 127.0.0.0/8 block
-        assert!(is_private_url("http://127.0.0.2/hook"));
-        assert!(is_private_url("http://127.255.255.255/hook"));
-    }
-
-    #[test]
-    fn test_is_private_url_ipv6_unspecified() {
-        // [::] is the IPv6 unspecified address — should be private
-        assert!(is_private_url("http://[::]/hook"));
-    }
-
-    #[test]
-    fn test_is_private_url_ipv6_mapped_loopback() {
-        // The url crate normalizes ::ffff:127.0.0.1 to 127.0.0.1, so it
-        // gets caught by the 127.x check. Verify it's still blocked.
-        // Use the internal function directly for the mapped-prefix path:
-        let h = "::ffff:127.0.0.1";
-        if let Some(ipv4_part) = h.strip_prefix("::ffff:") {
-            assert!(ipv4_part.starts_with("127."));
-        }
-    }
-
-    #[test]
-    fn test_is_private_url_ipv6_mapped_private() {
-        // Same normalization: ::ffff:10.0.0.1 becomes 10.0.0.1 in url crate
-        let h = "::ffff:10.0.0.1";
-        if let Some(ipv4_part) = h.strip_prefix("::ffff:") {
-            assert!(ipv4_part.starts_with("10."));
-        }
-    }
-
-    #[test]
-    fn test_is_private_url_ipv6_mapped_public() {
-        // ::ffff:8.8.8.8 maps to a public IP — should NOT be private
-        let h = "::ffff:8.8.8.8";
-        if let Some(ipv4_part) = h.strip_prefix("::ffff:") {
-            assert!(!ipv4_part.starts_with("127."));
-            assert!(!ipv4_part.starts_with("10."));
-            assert!(!ipv4_part.starts_with("192.168."));
-            assert!(!is_private_172(ipv4_part));
-        }
     }
 }
