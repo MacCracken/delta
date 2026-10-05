@@ -164,6 +164,10 @@ async fn cancel_pipeline(
             "internal server error".into(),
         )
     })?;
+    // Stop handing its jobs to self-hosted runners.
+    if let Err(e) = db::runner::cancel_pipeline_jobs(&state.db, &pipeline_id).await {
+        tracing::error!("failed to cancel queued jobs: {}", e);
+    }
     Ok(Json(run))
 }
 

@@ -460,3 +460,76 @@ async fn test_reclaim_jobs_of_deleted_runner() {
     let job = db::runner::get_queued_job(&pool, "q-doomed").await.unwrap();
     assert_eq!(job.status, "pending");
 }
+
+#[tokio::test]
+async fn test_poll_job_is_not_starved_by_unmatched_jobs() {
+    let pool = common::setup_pool().await;
+    let (repo_id, pipeline_id, _) = create_pipeline_and_job(&pool).await;
+    let gpu = vec!["gpu".to_string()];
+    // More unmatched jobs than one page of the queue.
+    for i in 0..150 {
+        let job = db::pipeline::create_job(&pool, &pipeline_id, &format!("gpu-{i}"))
+            .await
+            .unwrap();
+        db::runner::enqueue_job(
+            &pool,
+            &format!("gpu-q{i}"),
+            &job.id,
+            &pipeline_id,
+            &repo_id,
+            &gpu,
+            "{}",
+        )
+        .await
+        .unwrap();
+    }
+    let job = db::pipeline::create_job(&pool, &pipeline_id, "plain")
+        .await
+        .unwrap();
+    db::runner::enqueue_job(&pool, "plain-q", &job.id, &pipeline_id, &repo_id, &[], "{}")
+        .await
+        .unwrap();
+
+    let runner = db::runner::register(&pool, "cpu-runner", "hash", &[])
+        .await
+        .unwrap();
+    let claimed = db::runner::poll_job(&pool, &runner.id, &[]).await.unwrap();
+    assert_eq!(claimed.map(|j| j.id).as_deref(), Some("plain-q"));
+}
+
+#[tokio::test]
+async fn test_cancelled_pipeline_jobs_are_not_handed_out() {
+    let pool = common::setup_pool().await;
+    let (repo_id, pipeline_id, job_run_id) = create_pipeline_and_job(&pool).await;
+    db::runner::enqueue_job(
+        &pool,
+        "q-cancel",
+        &job_run_id,
+        &pipeline_id,
+        &repo_id,
+        &[],
+        "{}",
+    )
+    .await
+    .unwrap();
+
+    db::pipeline::update_pipeline_status(&pool, &pipeline_id, db::pipeline::RunStatus::Cancelled)
+        .await
+        .unwrap();
+    let runner = db::runner::register(&pool, "r", "hash", &[]).await.unwrap();
+    assert!(
+        db::runner::poll_job(&pool, &runner.id, &[])
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    assert_eq!(
+        db::runner::cancel_pipeline_jobs(&pool, &pipeline_id)
+            .await
+            .unwrap(),
+        1
+    );
+    let job = db::runner::get_queued_job(&pool, "q-cancel").await.unwrap();
+    assert_eq!(job.status, "cancelled");
+}

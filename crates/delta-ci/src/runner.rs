@@ -12,7 +12,7 @@ use crate::remote;
 use crate::trigger::{self, Event};
 use delta_core::db;
 use sqlx::SqlitePool;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tokio::sync::broadcast;
 
@@ -150,11 +150,51 @@ async fn run_pipelines(
         let secret_needles = crate::mask::secret_needles(ctx.secrets.values().map(String::as_str));
 
         let mut pipeline_passed = true;
+        let mut cancelled = false;
+        // Original job keys with a failed or skipped instance (dependents of
+        // these must not run) and keys dispatched to self-hosted runners
+        // (they finish asynchronously, so nothing here can wait for them).
+        let mut failed_keys: HashSet<String> = HashSet::new();
+        let mut remote_keys: HashSet<String> = HashSet::new();
+        // Matrix groups whose fail_fast was triggered.
+        let mut failed_fast_keys: HashSet<String> = HashSet::new();
 
         for job_name in &job_order {
             let Some(expanded) = expanded_jobs.get(job_name) else {
                 continue;
             };
+
+            // Stop starting jobs once the pipeline has been cancelled.
+            if matches!(
+                db::pipeline::get_pipeline(ctx.pool, &pipeline.id).await,
+                Ok(run) if run.status == db::pipeline::RunStatus::Cancelled
+            ) {
+                cancelled = true;
+                break;
+            }
+
+            if failed_fast_keys.contains(&expanded.key) {
+                // fail_fast: remaining instances of this matrix group don't run.
+                failed_keys.insert(expanded.key.clone());
+                continue;
+            }
+
+            // A job runs only after everything it needs has passed.
+            let blocked_reason =
+                if let Some(dep) = expanded.job.needs.iter().find(|n| failed_keys.contains(*n)) {
+                    Some(format!("skipped: needed job '{dep}' did not succeed"))
+                } else {
+                    expanded
+                    .job
+                    .needs
+                    .iter()
+                    .find(|n| remote_keys.contains(*n))
+                    .map(|dep| {
+                        format!(
+                            "jobs cannot depend on self-hosted job '{dep}': it runs asynchronously"
+                        )
+                    })
+                };
 
             // Create job record with display name (includes matrix values)
             let job_run = match db::pipeline::create_job(
@@ -188,6 +228,40 @@ async fn run_pipelines(
             .await
             {
                 tracing::error!(job_id = %job_run.id, "failed to mark job as running: {}", e);
+            }
+
+            if let Some(reason) = blocked_reason {
+                tracing::info!(job = &expanded.display_name, "{}", reason);
+                if let Err(e) = db::pipeline::append_step_log(
+                    ctx.pool,
+                    &job_run.id,
+                    "dependencies",
+                    0,
+                    &reason,
+                    "failed",
+                )
+                .await
+                {
+                    tracing::error!(job_id = %job_run.id, "failed to store step log: {}", e);
+                }
+                if let Err(e) = db::pipeline::update_job_status(
+                    ctx.pool,
+                    &job_run.id,
+                    db::pipeline::RunStatus::Failed,
+                    None,
+                )
+                .await
+                {
+                    tracing::error!(job_id = %job_run.id, "failed to mark job as failed: {}", e);
+                }
+                let _ = tx.send(PipelineEvent::JobCompleted {
+                    job_id: job_run.id.clone(),
+                    success: false,
+                    exit_code: None,
+                });
+                failed_keys.insert(expanded.key.clone());
+                pipeline_passed = false;
+                continue;
             }
 
             // Inject MATRIX_* env vars for this instance
@@ -274,12 +348,14 @@ async fn run_pipelines(
                             tracing::error!(job_id = %job_run.id, "failed to mark job as failed: {}", e);
                         }
                         pipeline_passed = false;
+                        failed_keys.insert(expanded.key.clone());
                         if expanded.fail_fast {
-                            break;
+                            failed_fast_keys.insert(expanded.key.clone());
                         }
                     }
                 }
                 // Don't wait for remote jobs — they complete asynchronously
+                remote_keys.insert(expanded.key.clone());
                 continue;
             }
 
@@ -351,14 +427,26 @@ async fn run_pipelines(
 
             if !result.success {
                 pipeline_passed = false;
+                failed_keys.insert(expanded.key.clone());
                 if expanded.fail_fast {
                     tracing::info!(
                         job = &expanded.display_name,
                         "fail_fast: stopping remaining matrix jobs"
                     );
-                    break;
+                    failed_fast_keys.insert(expanded.key.clone());
                 }
             }
+        }
+
+        if cancelled {
+            tracing::info!(pipeline_id = %pipeline.id, "pipeline cancelled; not starting further jobs");
+            let _ = tx.send(PipelineEvent::PipelineCompleted {
+                status: "cancelled".to_string(),
+            });
+            if let Some(streams) = ctx.streams {
+                streams.remove(&pipeline.id);
+            }
+            continue;
         }
 
         // Check if any jobs were dispatched to remote runners (still queued).
