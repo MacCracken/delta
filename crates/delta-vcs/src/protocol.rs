@@ -1,10 +1,12 @@
-//! Git smart HTTP protocol handlers.
+//! Git transport protocol helpers.
 //!
 //! Implements the server side of the git smart HTTP transport:
 //! - `GET /info/refs?service=git-upload-pack` — ref advertisement for clone/fetch
 //! - `GET /info/refs?service=git-receive-pack` — ref advertisement for push
 //! - `POST /git-upload-pack` — pack negotiation and data transfer (clone/fetch)
 //! - `POST /git-receive-pack` — receive pushed data
+//!
+//! and the processes behind the SSH transport ([`spawn_service_session`]).
 
 use std::path::Path;
 use std::process::Stdio;
@@ -15,6 +17,24 @@ use delta_core::{DeltaError, Result};
 /// Run `git-upload-pack --advertise-refs` or `git-receive-pack --advertise-refs`
 /// for the info/refs endpoint.
 pub async fn advertise_refs(repo_path: &Path, service: &str) -> Result<Vec<u8>> {
+    let advertisement = ref_advertisement(repo_path, service).await?;
+
+    // Build the smart HTTP response:
+    // First line: pkt-line with "# service=git-upload-pack\n"
+    // Then: flush packet (0000)
+    // Then: the ref advertisement from git
+    let mut body = Vec::new();
+    let service_line = format!("# service={}\n", service);
+    write_pkt_line(&mut body, service_line.as_bytes());
+    body.extend_from_slice(b"0000");
+    body.extend_from_slice(&advertisement);
+
+    Ok(body)
+}
+
+/// The ref advertisement `service` (`git-upload-pack` or `git-receive-pack`)
+/// opens a protocol v0 session with, as git writes it.
+pub async fn ref_advertisement(repo_path: &Path, service: &str) -> Result<Vec<u8>> {
     validate_service(service)?;
 
     let output = Command::new("git")
@@ -22,6 +42,7 @@ pub async fn advertise_refs(repo_path: &Path, service: &str) -> Result<Vec<u8>> 
         .arg("--stateless-rpc")
         .arg("--advertise-refs")
         .arg(repo_path)
+        .env_remove("GIT_PROTOCOL")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -36,28 +57,12 @@ pub async fn advertise_refs(repo_path: &Path, service: &str) -> Result<Vec<u8>> 
             service
         )));
     }
-
-    // Build the smart HTTP response:
-    // First line: pkt-line with "# service=git-upload-pack\n"
-    // Then: flush packet (0000)
-    // Then: the ref advertisement from git
-    let mut body = Vec::new();
-    let service_line = format!("# service={}\n", service);
-    write_pkt_line(&mut body, service_line.as_bytes());
-    body.extend_from_slice(b"0000");
-    body.extend_from_slice(&output.stdout);
-
-    Ok(body)
+    Ok(output.stdout)
 }
 
 /// Run `git-upload-pack --stateless-rpc` for clone/fetch, buffering I/O.
 pub async fn upload_pack(repo_path: &Path, input: &[u8]) -> Result<Vec<u8>> {
     run_service_rpc(repo_path, "upload-pack", input).await
-}
-
-/// Run `git-receive-pack --stateless-rpc` for push, buffering I/O.
-pub async fn receive_pack(repo_path: &Path, input: &[u8]) -> Result<Vec<u8>> {
-    run_service_rpc(repo_path, "receive-pack", input).await
 }
 
 /// Spawn `git [-c key=value]... <service> --stateless-rpc <repo>` with piped
@@ -70,6 +75,30 @@ pub fn spawn_service_rpc(
     service: &str,
     config: &[(&str, &str)],
 ) -> Result<Child> {
+    spawn_service(repo_path, service, config, true, None)
+}
+
+/// Spawn `git <service> <repo>` for a full-duplex session (the SSH
+/// transport): the ref advertisement, negotiation and pack all flow over
+/// one pair of pipes. `git_protocol` is the client's `GIT_PROTOCOL` request
+/// (e.g. `version=2`).
+///
+/// The child is killed if dropped, and its stderr is drained into the log.
+pub fn spawn_service_session(
+    repo_path: &Path,
+    service: &str,
+    git_protocol: Option<&str>,
+) -> Result<Child> {
+    spawn_service(repo_path, service, &[], false, git_protocol)
+}
+
+fn spawn_service(
+    repo_path: &Path,
+    service: &str,
+    config: &[(&str, &str)],
+    stateless: bool,
+    git_protocol: Option<&str>,
+) -> Result<Child> {
     let service = service.strip_prefix("git-").unwrap_or(service);
     validate_service(&format!("git-{service}"))?;
 
@@ -77,9 +106,15 @@ pub fn spawn_service_rpc(
     for (key, value) in config {
         command.arg("-c").arg(format!("{key}={value}"));
     }
+    command.arg(service);
+    if stateless {
+        command.arg("--stateless-rpc");
+    }
+    match git_protocol {
+        Some(protocol) => command.env("GIT_PROTOCOL", protocol),
+        None => command.env_remove("GIT_PROTOCOL"),
+    };
     let mut child = command
-        .arg(service)
-        .arg("--stateless-rpc")
         .arg(repo_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

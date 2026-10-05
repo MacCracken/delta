@@ -87,9 +87,6 @@ async fn main() -> anyhow::Result<()> {
 
     let pool = db::init_pool_sized(&config.storage.db_url, config.scaling.db_pool_size).await?;
 
-    // Clone pool for SSH before moving into AppState
-    let ssh_pool = pool.clone();
-
     let state = AppState::new(config.clone(), pool);
 
     // Spawn workspace TTL cleanup task
@@ -138,6 +135,7 @@ async fn main() -> anyhow::Result<()> {
     // Clone rate limiters for the background cleanup task before state is consumed.
     let cleanup_limiter = state.rate_limiter.clone();
     let cleanup_auth_limiter = state.auth_rate_limiter.clone();
+    let ssh_state = state.clone();
 
     let app = routes::router(state);
 
@@ -148,15 +146,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Start SSH server if enabled
     if config.ssh.enabled {
-        let ssh_config = config.ssh.clone();
-        let ssh_repos_dir = config.storage.repos_dir.clone();
-        let ssh_host = config.server.host.clone();
-
         tokio::spawn(async move {
-            if let Err(e) =
-                delta_api::ssh::start_ssh_server(&ssh_config, ssh_pool, ssh_repos_dir, &ssh_host)
-                    .await
-            {
+            if let Err(e) = delta_api::ssh::start_ssh_server(ssh_state).await {
                 tracing::error!("SSH server error: {}", e);
             }
         });

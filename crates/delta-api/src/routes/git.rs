@@ -27,7 +27,7 @@ use delta_core::models::user::User;
 use delta_vcs::protocol::{self, RefUpdate};
 use futures_util::TryStreamExt;
 use serde::Deserialize;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::Child;
 use tokio_util::io::{ReaderStream, StreamReader};
 
@@ -218,35 +218,66 @@ async fn receive_pack(
     // Push always requires auth with write access.
     let (user, repo_record) = authorize_push(&state, &headers, &owner, name).await?;
 
+    let mut output = Vec::new();
+    serve_push(
+        &state,
+        &owner,
+        &repo_record,
+        &repo_path,
+        &user,
+        &mut body_reader(body),
+        &mut output,
+    )
+    .await?;
+    Ok(rpc_result("receive-pack", Body::from(output)))
+}
+
+/// Serve one push (the part after the ref advertisement) for either
+/// transport: read the ref-update commands from `input`, enforce branch
+/// protection, let git apply the commands and pack, and write git's report
+/// to `output`. Webhooks and pipelines are dispatched for the updates git
+/// applied.
+pub(crate) async fn serve_push<R, W>(
+    state: &AppState,
+    owner: &str,
+    repo: &Repository,
+    repo_path: &std::path::Path,
+    pusher: &User,
+    input: &mut R,
+    output: &mut W,
+) -> Result<(), HttpError>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let bad_request = |e: &dyn std::fmt::Display| (StatusCode::BAD_REQUEST, e.to_string());
+
     // Read the ref-update commands before handing anything to git.
-    let mut reader = body_reader(body);
     let mut prefix = Vec::new();
     let commands_len = loop {
-        if let Some(len) = protocol::receive_commands_len(&prefix)
-            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?
-        {
+        if let Some(len) = protocol::receive_commands_len(&prefix).map_err(|e| bad_request(&e))? {
             break len;
         }
         if prefix.len() > MAX_PUSH_COMMANDS_BYTES {
             return Err((StatusCode::PAYLOAD_TOO_LARGE, "too many ref updates".into()));
         }
         let mut chunk = [0u8; 8192];
-        let n = reader
-            .read(&mut chunk)
-            .await
-            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        let n = input.read(&mut chunk).await.map_err(|e| bad_request(&e))?;
         if n == 0 {
+            if prefix.is_empty() {
+                return Ok(()); // the client had nothing to send
+            }
             return Err((StatusCode::BAD_REQUEST, "truncated push request".into()));
         }
         prefix.extend_from_slice(&chunk[..n]);
     };
-    let commands = protocol::parse_receive_commands(&prefix[..commands_len])
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let commands =
+        protocol::parse_receive_commands(&prefix[..commands_len]).map_err(|e| bad_request(&e))?;
 
     // Enforce branch protection. Fast-forward checks need the pushed
     // objects, so they are delegated to git via receive.denyNonFastForwards.
     let protections =
-        delta_core::db::branch_protection::list_for_repo(&state.db, &repo_record.id.to_string())
+        delta_core::db::branch_protection::list_for_repo(&state.db, &repo.id.to_string())
             .await
             .map_err(internal_error)?;
     let mut fast_forward_only = false;
@@ -268,10 +299,11 @@ async fn receive_pack(
             None
         };
         if let Some(reason) = violation {
-            return Ok(rpc_result(
-                "receive-pack",
-                Body::from(protocol::rejection_report(&commands, reason)),
-            ));
+            output
+                .write_all(&protocol::rejection_report(&commands, reason))
+                .await
+                .map_err(internal_error)?;
+            return Ok(());
         }
         if rule.prevent_force_push && !update.is_create() && !update.is_delete() {
             fast_forward_only = true;
@@ -284,31 +316,41 @@ async fn receive_pack(
         &[]
     };
     let mut child =
-        protocol::spawn_service_rpc(&repo_path, "receive-pack", config).map_err(internal_error)?;
+        protocol::spawn_service_rpc(repo_path, "receive-pack", config).map_err(internal_error)?;
     let (Some(mut stdin), Some(mut stdout)) = (child.stdin.take(), child.stdout.take()) else {
         return Err(internal_error("git pipes unavailable"));
     };
 
+    // Owns stdin: git sees the end of the request only when the pipe is
+    // closed (dropped), e.g. after a truncated pack.
     let feed = async move {
         stdin.write_all(&prefix).await?;
-        let mut limited = (&mut reader).take(MAX_PUSH_BYTES + 1);
+        let mut limited = input.take(MAX_PUSH_BYTES + 1);
         let copied = tokio::io::copy(&mut limited, &mut stdin).await?;
         if copied > MAX_PUSH_BYTES {
-            return Err(std::io::Error::other("push too large"));
+            return Err(std::io::Error::from(std::io::ErrorKind::FileTooLarge));
         }
-        stdin.shutdown().await
+        Ok(())
     };
-    let mut output = Vec::new();
-    let (feed_result, read_result) = tokio::join!(feed, stdout.read_to_end(&mut output));
-    if let Err(e) = feed_result {
-        if e.to_string() == "push too large" {
-            let _ = child.kill().await;
-            return Err((StatusCode::PAYLOAD_TOO_LARGE, "push too large".into()));
+    let respond = tokio::io::copy(&mut stdout, output);
+    tokio::pin!(feed, respond);
+    // Done when git is: a client may wait for the report before it closes
+    // its side (SSH), and git stops reading when it rejects a push.
+    let responded = tokio::select! {
+        responded = &mut respond => responded,
+        fed = &mut feed => {
+            if let Err(e) = fed {
+                if e.kind() == std::io::ErrorKind::FileTooLarge {
+                    let _ = child.kill().await;
+                    return Err((StatusCode::PAYLOAD_TOO_LARGE, "push too large".into()));
+                }
+                // git's output says why it stopped reading.
+                tracing::debug!("receive-pack request stream ended: {}", e);
+            }
+            respond.await
         }
-        // git stops reading when it rejects a push; its output says why.
-        tracing::debug!("receive-pack request stream ended: {}", e);
-    }
-    read_result.map_err(internal_error)?;
+    };
+    responded.map_err(internal_error)?;
     match tokio::time::timeout(RPC_TIMEOUT, child.wait()).await {
         Ok(Ok(status)) if !status.success() => {
             tracing::debug!(%status, "git receive-pack exited with error");
@@ -326,7 +368,7 @@ async fn receive_pack(
         .updates
         .into_iter()
         .filter(|u| {
-            let current = delta_vcs::refs::ref_target(&repo_path, &u.refname);
+            let current = delta_vcs::refs::ref_target(repo_path, &u.refname);
             if u.is_delete() {
                 current.is_none()
             } else {
@@ -336,16 +378,23 @@ async fn receive_pack(
         .collect();
     if !applied.is_empty() {
         let state = state.clone();
+        let owner = owner.to_string();
+        let repo = repo.clone();
+        let repo_path = repo_path.to_path_buf();
+        let pusher = pusher.clone();
         tokio::spawn(async move {
-            dispatch_push_events(&state, &owner, &repo_record, &repo_path, &user, &applied).await;
+            dispatch_push_events(&state, &owner, &repo, &repo_path, &pusher, &applied).await;
         });
     }
-
-    Ok(rpc_result("receive-pack", Body::from(output)))
+    Ok(())
 }
 
 /// Look up the repository record for `owner/name`.
-async fn find_repo(state: &AppState, owner: &str, name: &str) -> Result<Repository, HttpError> {
+pub(crate) async fn find_repo(
+    state: &AppState,
+    owner: &str,
+    name: &str,
+) -> Result<Repository, HttpError> {
     let not_found = || (StatusCode::NOT_FOUND, "repository not found".to_string());
     let owner_user = delta_core::db::user::get_by_username(&state.db, owner)
         .await

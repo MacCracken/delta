@@ -193,6 +193,39 @@ async fn test_ssh_key_delete_wrong_user() {
 }
 
 #[tokio::test]
+async fn test_ssh_key_fingerprints_are_unique() {
+    let pool = common::setup_pool().await;
+    let alice = common::create_test_user(&pool).await;
+    let mallory = common::create_second_user(&pool).await;
+    db::ssh_key::add(
+        &pool,
+        &alice.id.to_string(),
+        "laptop",
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKey alice@laptop",
+        "SHA256:samekey",
+    )
+    .await
+    .unwrap();
+
+    // The same key with another comment: one key must map to one account.
+    let err = db::ssh_key::add(
+        &pool,
+        &mallory.id.to_string(),
+        "copied",
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKey mallory",
+        "SHA256:samekey",
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, delta_core::DeltaError::Conflict(_)), "{err}");
+    let (owner, _) = db::ssh_key::get_user_by_fingerprint(&pool, "SHA256:samekey")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(owner, alice.id.to_string());
+}
+
+#[tokio::test]
 async fn test_ssh_key_fingerprint_not_found() {
     let pool = common::setup_pool().await;
 

@@ -265,9 +265,18 @@ async fn test_db_init_pool_upgrades_untracked_legacy_database() {
         ] {
             sqlx::raw_sql(sql).execute(&pool).await.unwrap();
         }
-        db::user::create(&pool, "legacy", "legacy@test.com", "pass", false)
+        let legacy = db::user::create(&pool, "legacy", "legacy@test.com", "pass", false)
             .await
             .unwrap();
+        let other = db::user::create(&pool, "other", "other@test.com", "pass", false)
+            .await
+            .unwrap();
+        // Only the key text was unique: the same key registered twice.
+        for (user, text) in [(&legacy, "AAAA legacy"), (&other, "AAAA other")] {
+            db::ssh_key::add(&pool, &user.id.to_string(), "k", text, "SHA256:dup")
+                .await
+                .unwrap();
+        }
         pool.close().await;
     }
 
@@ -275,6 +284,17 @@ async fn test_db_init_pool_upgrades_untracked_legacy_database() {
     let user = db::user::get_by_username(&pool, "legacy").await.unwrap();
     // The earliest user of an install without an admin is promoted.
     assert!(user.is_admin);
+    // The earliest registration of a duplicated key is kept.
+    let (owner, _) = db::ssh_key::get_user_by_fingerprint(&pool, "SHA256:dup")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(owner, user.id.to_string());
+    let keys: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ssh_keys")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(keys, 1);
 }
 
 #[tokio::test]

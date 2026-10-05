@@ -56,14 +56,31 @@ pub async fn start_server_with(configure: impl FnOnce(&mut DeltaConfig)) -> Serv
     }
 }
 
+/// `len` bytes that don't compress (so a pack is about as large).
+pub fn incompressible(len: u32) -> Vec<u8> {
+    (0..len)
+        .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+        .collect()
+}
+
 /// Run git without prompting for credentials or reading user configuration.
 pub async fn git(dir: &Path, args: &[&str]) -> Output {
+    git_with_env(dir, args, &[]).await
+}
+
+/// Like [`git`], with extra environment variables.
+pub async fn git_with_env(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
     let dir = dir.to_path_buf();
     let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    let env: Vec<(String, String)> = env
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
     tokio::task::spawn_blocking(move || {
         Command::new("git")
             .current_dir(dir)
             .args(&args)
+            .envs(env)
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")

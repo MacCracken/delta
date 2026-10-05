@@ -13,10 +13,8 @@ async fn push_and_clone_over_http() {
 
     let work = tempfile::tempdir().unwrap();
     git_ok(work.path(), &["init", "-q", "-b", "main"]).await;
-    // Larger than axum's default 2 MiB request body limit, and incompressible.
-    let data: Vec<u8> = (0..3 * 1024 * 1024u32)
-        .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
-        .collect();
+    // Larger than axum's default 2 MiB request body limit.
+    let data = common::incompressible(3 * 1024 * 1024);
     std::fs::write(work.path().join("blob.bin"), &data).unwrap();
     git_ok(work.path(), &["add", "."]).await;
     git_ok(work.path(), &["commit", "-q", "-m", "init"]).await;
@@ -94,7 +92,11 @@ async fn branch_protection_is_enforced_on_push() {
         .unwrap()
         .status();
     assert!(status.is_success());
-    git_ok(dir, &["commit", "-q", "--allow-empty", "-m", "direct"]).await;
+    // Rejected before git reads the pack: the client still gets the reason
+    // while it is sending a large one.
+    std::fs::write(dir.join("big.bin"), common::incompressible(3 * 1024 * 1024)).unwrap();
+    git_ok(dir, &["add", "big.bin"]).await;
+    git_ok(dir, &["commit", "-q", "-m", "direct"]).await;
     let out = git(dir, &["push", &url, "main"]).await;
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("pull request"));
