@@ -42,3 +42,4 @@ russh = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 reqwest = { workspace = true }
+tower = { workspace = true, features = ["util"] }

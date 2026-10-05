@@ -37,7 +37,7 @@ pub fn router() -> Router<AppState> {
             axum::routing::post(write_files),
         )
         .route(
-            "/{owner}/{name}/workspaces/{ws_id}/files/*path",
+            "/{owner}/{name}/workspaces/{ws_id}/files/{*path}",
             get(read_file),
         )
         .route("/{owner}/{name}/workspaces/{ws_id}/tree", get(list_tree))
