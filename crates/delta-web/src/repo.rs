@@ -45,6 +45,8 @@ pub struct BlobPage {
     pub path_parts: Vec<PathPart>,
     pub filename: String,
     pub content: String,
+    /// Too large to render; offered raw instead.
+    pub too_large: bool,
     pub line_count: usize,
     pub size_display: String,
     pub branches: Vec<String>,

@@ -29,6 +29,9 @@ pub enum DeltaError {
     #[error("registry error: {0}")]
     Registry(String),
 
+    #[error("too large: {0}")]
+    TooLarge(String),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
@@ -92,6 +95,11 @@ mod tests {
         );
         assert!(
             !DeltaError::Registry("pkg missing".into())
+                .to_string()
+                .is_empty()
+        );
+        assert!(
+            !DeltaError::TooLarge("file.bin".into())
                 .to_string()
                 .is_empty()
         );

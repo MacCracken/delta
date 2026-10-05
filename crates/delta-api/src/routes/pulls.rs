@@ -566,7 +566,7 @@ async fn get_diff(
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     let diff = delta_vcs::diff::diff_refs(&repo_path, &pr.base_branch, &pr.head_branch)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| crate::helpers::vcs_error(e, StatusCode::INTERNAL_SERVER_ERROR))?;
 
     Ok((
         StatusCode::OK,

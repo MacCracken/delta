@@ -14,6 +14,19 @@ use crate::state::AppState;
 /// Without an explicit limit axum rejects bodies over 2 MiB.
 pub const MAX_UPLOAD_BYTES: usize = 100 * 1024 * 1024;
 
+/// Largest file shown in the web UI or returned as text to tools (MCP, AI);
+/// larger files are available through the raw endpoint.
+pub const MAX_TEXT_FILE_BYTES: u64 = 1024 * 1024;
+
+/// Map a git read error: content too large to return is 422, anything else
+/// `fallback`.
+pub fn vcs_error(e: delta_core::DeltaError, fallback: StatusCode) -> (StatusCode, String) {
+    match e {
+        delta_core::DeltaError::TooLarge(_) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()),
+        e => (fallback, e.to_string()),
+    }
+}
+
 pub fn strip_git_suffix(repo: &str) -> &str {
     repo.strip_suffix(".git").unwrap_or(repo)
 }

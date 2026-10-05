@@ -104,10 +104,12 @@ async fn test_diff_stat() {
     let stat = delta_vcs::diff::diff_stat(&bare, "main", "feature")
         .await
         .unwrap();
-    assert!(stat.files_changed >= 1);
-    assert!(stat.additions > 0);
-    // At least one file should be feature.txt
-    assert!(stat.files.iter().any(|f| f.path == "feature.txt"));
+    // Exactly the one file the branch adds: no entries parsed from the
+    // `--stat` summary lines.
+    assert_eq!(stat.files_changed, 1);
+    assert_eq!(stat.additions, 1);
+    assert_eq!(stat.deletions, 0);
+    assert_eq!(stat.files[0].path, "feature.txt");
 }
 
 #[tokio::test]

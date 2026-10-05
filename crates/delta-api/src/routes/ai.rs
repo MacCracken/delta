@@ -405,7 +405,7 @@ async fn ai_review_pr(
 
     let diff = delta_vcs::diff::diff_refs(&repo_path, &pr.base_branch, &pr.head_branch)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| crate::helpers::vcs_error(e, StatusCode::INTERNAL_SERVER_ERROR))?;
 
     let context = format!(
         "Repository: {}/{}\nPR #{}: {}\nBranch: {} -> {}",
@@ -474,7 +474,7 @@ async fn ai_describe_pr(
 
     let diff = delta_vcs::diff::diff_refs(&repo_path, &req.base_branch, &req.head_branch)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| crate::helpers::vcs_error(e, StatusCode::INTERNAL_SERVER_ERROR))?;
 
     let commits = delta_vcs::diff::list_commits(&repo_path, &req.base_branch, &req.head_branch)
         .await
@@ -558,9 +558,14 @@ async fn ai_query_repo(
         .unwrap_or_default();
 
     // Try reading README
-    let readme_content = delta_vcs::browse::read_blob_text(&repo_path, "HEAD", "README.md")
-        .await
-        .ok();
+    let readme_content = delta_vcs::browse::read_blob_text(
+        &repo_path,
+        "HEAD",
+        "README.md",
+        crate::helpers::MAX_TEXT_FILE_BYTES,
+    )
+    .await
+    .ok();
 
     // Search for relevant files if FTS5 is available
     let repo_id = repo.id.to_string();
@@ -604,7 +609,13 @@ async fn ai_query_repo(
 
     // Try to read content of relevant files for more context
     for file_path in &relevant_files {
-        if let Ok(content) = delta_vcs::browse::read_blob_text(&repo_path, "HEAD", file_path).await
+        if let Ok(content) = delta_vcs::browse::read_blob_text(
+            &repo_path,
+            "HEAD",
+            file_path,
+            crate::helpers::MAX_TEXT_FILE_BYTES,
+        )
+        .await
         {
             let truncated = delta_core::ai::truncate_for_context(&content, 2000);
             context.push_str(&format!(
@@ -715,7 +726,14 @@ async fn index_repo(
             continue;
         }
         let entry_path = &entry.path;
-        match delta_vcs::browse::read_blob_text(&repo_path, "HEAD", entry_path).await {
+        match delta_vcs::browse::read_blob_text(
+            &repo_path,
+            "HEAD",
+            entry_path,
+            MAX_INDEXED_FILE_SIZE,
+        )
+        .await
+        {
             Ok(content) => {
                 // Skip likely binary files
                 if is_likely_binary(&content) {

@@ -4,9 +4,16 @@ use delta_core::{DeltaError, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Stdio;
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 
+use crate::process::output_capped;
 use crate::validate::validate_ref;
+
+/// Most output kept from a log or listing command; entries past it are
+/// dropped.
+const MAX_LISTING_BYTES: usize = 32 * 1024 * 1024;
+/// Most diff text produced for one commit or comparison.
+pub const MAX_DIFF_BYTES: usize = 10 * 1024 * 1024;
 
 /// A single entry in a git tree listing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +60,8 @@ pub struct CommitDetail {
     pub message: String,
     pub body: String,
     pub diff: String,
+    /// The diff was too large to include.
+    pub diff_truncated: bool,
     pub stats: Vec<CommitFileStat>,
 }
 
@@ -168,21 +177,18 @@ pub struct BlobEntry {
 /// single `git ls-tree -r` (no per-directory recursion).
 pub async fn list_blobs(repo_path: &Path, rev: &str) -> Result<Vec<BlobEntry>> {
     validate_ref(rev)?;
-    let output = Command::new("git")
-        .args(["ls-tree", "-r", "-z", "-l", rev])
-        .current_dir(repo_path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| DeltaError::Storage(format!("failed to run git ls-tree: {}", e)))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::error!("git ls-tree -r failed: {}", stderr);
+    let output = output_capped(
+        Command::new("git")
+            .args(["ls-tree", "-r", "-z", "-l", rev])
+            .current_dir(repo_path),
+        MAX_LISTING_BYTES,
+    )
+    .await?;
+    if !output.status.success() && !output.truncated {
+        tracing::error!("git ls-tree -r failed: {}", output.stderr);
         return Err(DeltaError::Storage("git ls-tree failed".into()));
     }
-    Ok(output
-        .stdout
+    Ok(complete_records(&output.stdout)
         .split(|&b| b == 0)
         .filter_map(parse_ls_tree_record)
         .filter(|(_, kind, _, _, _)| kind == "blob")
@@ -191,6 +197,14 @@ pub async fn list_blobs(repo_path: &Path, rev: &str) -> Result<Vec<BlobEntry>> {
             size: size.unwrap_or(0),
         })
         .collect())
+}
+
+/// The NUL-terminated records in `output`, without a cut-off last one.
+fn complete_records(output: &[u8]) -> &[u8] {
+    match output.iter().rposition(|&b| b == 0) {
+        Some(end) => &output[..end],
+        None => &[],
+    }
 }
 
 /// Parse one NUL-terminated `git ls-tree -z [-l]` record:
@@ -211,42 +225,101 @@ fn parse_ls_tree_record(record: &[u8]) -> Option<(String, String, String, Option
 // Blob reading
 // ---------------------------------------------------------------------------
 
-/// Read the raw bytes of a file at the given revision and path.
-pub async fn read_blob(repo_path: &Path, rev: &str, path: &str) -> Result<Vec<u8>> {
+/// The `<rev>:<path>` object name of a file, after validating both parts.
+fn blob_object(rev: &str, path: &str) -> Result<String> {
     validate_ref(rev)?;
     validate_path(path)?;
-
     if path.is_empty() {
         return Err(DeltaError::InvalidRef(
             "path must not be empty for blob read".into(),
         ));
     }
+    Ok(format!("{}:{}", rev, path))
+}
 
-    let object = format!("{}:{}", rev, path);
-
+/// Size in bytes of the file at the given revision and path, without
+/// reading it.
+pub async fn blob_size(repo_path: &Path, rev: &str, path: &str) -> Result<u64> {
+    let object = blob_object(rev, path)?;
     let output = Command::new("git")
-        .args(["show", &object])
+        .args(["cat-file", "-t", &object])
         .current_dir(repo_path)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::null())
         .output()
         .await
-        .map_err(|e| DeltaError::Storage(format!("failed to run git show: {}", e)))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::error!("git show failed: {}", stderr);
-        return Err(DeltaError::Storage("git show failed".into()));
+        .map_err(|e| DeltaError::Storage(format!("failed to run git cat-file: {}", e)))?;
+    match std::str::from_utf8(&output.stdout).map(str::trim) {
+        Ok("blob") if output.status.success() => {}
+        _ if !output.status.success() => {
+            return Err(DeltaError::NotFound(format!("{path} not found at {rev}")));
+        }
+        _ => return Err(DeltaError::InvalidRef(format!("{path} is not a file"))),
     }
 
+    let output = Command::new("git")
+        .args(["cat-file", "-s", &object])
+        .current_dir(repo_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .await
+        .map_err(|e| DeltaError::Storage(format!("failed to run git cat-file: {}", e)))?;
+    std::str::from_utf8(&output.stdout)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .filter(|_| output.status.success())
+        .ok_or_else(|| DeltaError::Storage("git cat-file -s failed".into()))
+}
+
+/// Start `git cat-file blob <rev>:<path>`, whose stdout streams the file.
+/// The child is killed if dropped; the caller must reap it.
+pub fn spawn_blob_reader(repo_path: &Path, rev: &str, path: &str) -> Result<Child> {
+    let object = blob_object(rev, path)?;
+    Command::new("git")
+        .args(["cat-file", "blob", &object])
+        .current_dir(repo_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| DeltaError::Storage(format!("failed to run git cat-file: {}", e)))
+}
+
+/// Read the raw bytes of a file at the given revision and path, refusing
+/// (with [`DeltaError::TooLarge`]) files larger than `max_bytes`. At most
+/// `max_bytes + 1` bytes are ever held in memory.
+pub async fn read_blob(repo_path: &Path, rev: &str, path: &str, max_bytes: u64) -> Result<Vec<u8>> {
+    let object = blob_object(rev, path)?;
+    let max_bytes = usize::try_from(max_bytes).unwrap_or(usize::MAX - 1);
+    let output = output_capped(
+        Command::new("git")
+            .args(["cat-file", "blob", &object])
+            .current_dir(repo_path),
+        max_bytes,
+    )
+    .await?;
+    if output.truncated {
+        return Err(DeltaError::TooLarge(format!(
+            "{path} is larger than {max_bytes} bytes"
+        )));
+    }
+    if !output.status.success() {
+        return Err(DeltaError::NotFound(format!("{path} not found at {rev}")));
+    }
     Ok(output.stdout)
 }
 
-/// Read a file as text at the given revision and path.
+/// Read a file as text at the given revision and path; see [`read_blob`].
 ///
 /// If the content is not valid UTF-8, lossy conversion is used.
-pub async fn read_blob_text(repo_path: &Path, rev: &str, path: &str) -> Result<String> {
-    let bytes = read_blob(repo_path, rev, path).await?;
+pub async fn read_blob_text(
+    repo_path: &Path,
+    rev: &str,
+    path: &str,
+    max_bytes: u64,
+) -> Result<String> {
+    let bytes = read_blob(repo_path, rev, path, max_bytes).await?;
     match String::from_utf8(bytes) {
         Ok(s) => Ok(s),
         Err(e) => Ok(String::from_utf8_lossy(e.as_bytes()).into_owned()),
@@ -269,9 +342,13 @@ pub async fn log(
         validate_path(p)?;
     }
 
+    // NUL-terminated fields: git never emits NUL inside one (it cuts
+    // message and identity text at NUL), so commit messages can't forge
+    // entries the way they could with a text delimiter.
     let mut args = vec![
         "log".to_string(),
-        "--format=%H%n%an%n%ae%n%aI%n%s%n%b%n---END---".to_string(),
+        "-z".to_string(),
+        "--format=%H%x00%an%x00%ae%x00%aI%x00%s%x00%b".to_string(),
         format!("-n{}", limit),
         rev.to_string(),
     ];
@@ -283,57 +360,43 @@ pub async fn log(
         args.push(p.to_string());
     }
 
-    let output = Command::new("git")
-        .args(&args)
-        .current_dir(repo_path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| DeltaError::Storage(format!("failed to run git log: {}", e)))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::error!("git log failed: {}", stderr);
+    // Huge commit messages can't exhaust memory: entries past the cap are
+    // dropped (a cut-off record is never parsed).
+    let output = output_capped(
+        Command::new("git").args(&args).current_dir(repo_path),
+        MAX_LISTING_BYTES,
+    )
+    .await?;
+    if !output.status.success() && !output.truncated {
+        tracing::error!("git log failed: {}", output.stderr);
         return Err(DeltaError::Storage("git log failed".into()));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_log_records(&output.stdout))
+}
+
+/// Parse `git log -z` output in the six-field format [`log`] requests.
+fn parse_log_records(output: &[u8]) -> Vec<LogEntry> {
+    let fields: Vec<String> = complete_records(output)
+        .split(|&b| b == 0)
+        .map(|f| String::from_utf8_lossy(f).into_owned())
+        .collect();
     let mut entries = Vec::new();
-
-    for chunk in stdout.split("---END---\n") {
-        let chunk = chunk.trim();
-        if chunk.is_empty() {
-            continue;
+    for [sha, author_name, author_email, date, message, body] in fields.as_chunks::<6>().0 {
+        if !matches!(sha.len(), 40 | 64) || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+            tracing::error!("unexpected git log output");
+            break;
         }
-
-        let lines: Vec<&str> = chunk.lines().collect();
-        if lines.len() < 5 {
-            continue;
-        }
-
-        let sha = lines[0].to_string();
-        let author_name = lines[1].to_string();
-        let author_email = lines[2].to_string();
-        let date = lines[3].to_string();
-        let message = lines[4].to_string();
-        let body = if lines.len() > 5 {
-            lines[5..].join("\n").trim().to_string()
-        } else {
-            String::new()
-        };
-
         entries.push(LogEntry {
-            sha,
-            author_name,
-            author_email,
-            message,
-            body,
-            date,
+            sha: sha.clone(),
+            author_name: author_name.clone(),
+            author_email: author_email.clone(),
+            date: date.clone(),
+            message: message.clone(),
+            body: body.trim().to_string(),
         });
     }
-
-    Ok(entries)
+    entries
 }
 
 // ---------------------------------------------------------------------------
@@ -341,14 +404,18 @@ pub async fn log(
 // ---------------------------------------------------------------------------
 
 /// Run git blame in porcelain mode and return per-line blame information.
-pub async fn blame(repo_path: &Path, rev: &str, path: &str) -> Result<Vec<BlameLine>> {
-    validate_ref(rev)?;
-    validate_path(path)?;
-
-    if path.is_empty() {
-        return Err(DeltaError::InvalidRef(
-            "path must not be empty for blame".into(),
-        ));
+/// Files larger than `max_bytes` are refused with [`DeltaError::TooLarge`].
+pub async fn blame(
+    repo_path: &Path,
+    rev: &str,
+    path: &str,
+    max_bytes: u64,
+) -> Result<Vec<BlameLine>> {
+    let size = blob_size(repo_path, rev, path).await?;
+    if size > max_bytes {
+        return Err(DeltaError::TooLarge(format!(
+            "{path} is larger than {max_bytes} bytes"
+        )));
     }
 
     let output = Command::new("git")
@@ -366,56 +433,56 @@ pub async fn blame(repo_path: &Path, rev: &str, path: &str) -> Result<Vec<BlameL
         return Err(DeltaError::Storage("git blame failed".into()));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut results = Vec::new();
+    Ok(parse_blame_porcelain(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
+}
 
-    // Porcelain format: blocks starting with `sha orig_line final_line [group]`,
-    // then header lines, then a tab-prefixed content line.
+/// Parse `git blame --porcelain` output.
+///
+/// Each line is a header (`<sha> <orig_line> <final_line> [<group_size>]`),
+/// commit details, then the tab-prefixed content. A commit's details are
+/// only printed with the first line it is blamed for, so they are kept per
+/// commit for its later lines.
+fn parse_blame_porcelain(output: &str) -> Vec<BlameLine> {
+    let mut results = Vec::new();
+    // sha -> (author, date)
+    let mut commits: std::collections::HashMap<String, (String, String)> =
+        std::collections::HashMap::new();
     let mut current_sha = String::new();
-    let mut current_author = String::new();
-    let mut current_date = String::new();
     let mut current_line_number: usize = 0;
 
-    for line in stdout.lines() {
+    for line in output.lines() {
         if let Some(content) = line.strip_prefix('\t') {
             // Content line — this terminates the current entry.
+            let (author, date) = commits.get(&current_sha).cloned().unwrap_or_default();
             results.push(BlameLine {
                 sha: current_sha.clone(),
-                author: current_author.clone(),
-                date: current_date.clone(),
+                author,
+                date,
                 line_number: current_line_number,
                 content: content.to_string(),
             });
         } else if let Some(rest) = line.strip_prefix("author ") {
-            current_author = rest.to_string();
+            commits.entry(current_sha.clone()).or_default().0 = rest.to_string();
         } else if let Some(rest) = line.strip_prefix("author-time ") {
             // Convert epoch timestamp to ISO 8601 (UTC).
             if let Ok(epoch) = rest.trim().parse::<i64>() {
-                current_date = epoch_to_iso8601(epoch);
+                commits.entry(current_sha.clone()).or_default().1 = epoch_to_iso8601(epoch);
             }
-        } else if !line.starts_with("author-")
-            && !line.starts_with("committer")
-            && !line.starts_with("summary ")
-            && !line.starts_with("previous ")
-            && !line.starts_with("filename ")
-            && !line.starts_with("boundary")
-        {
-            // Possibly a header line: `sha orig_line final_line [group_size]`
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 3 {
-                let maybe_sha = parts[0];
-                // SHA is 40 hex chars (or 4+ for abbreviated, but porcelain gives full).
-                if maybe_sha.len() >= 4 && maybe_sha.chars().all(|c| c.is_ascii_hexdigit()) {
-                    current_sha = maybe_sha.to_string();
-                    if let Ok(n) = parts[2].parse::<usize>() {
-                        current_line_number = n;
-                    }
-                }
+        } else {
+            let parts: Vec<&str> = line.split(' ').collect();
+            let is_header = parts.len() >= 3
+                && matches!(parts[0].len(), 40 | 64)
+                && parts[0].bytes().all(|b| b.is_ascii_hexdigit());
+            if is_header && let Ok(n) = parts[2].parse::<usize>() {
+                current_sha = parts[0].to_string();
+                current_line_number = n;
             }
         }
     }
 
-    Ok(results)
+    results
 }
 
 /// Convert a Unix epoch timestamp to an ISO 8601 UTC string.
@@ -460,141 +527,99 @@ fn epoch_to_iso8601(epoch: i64) -> String {
 // Show commit
 // ---------------------------------------------------------------------------
 
-/// Get full details of a single commit, including diff and file stats.
+/// Show one commit: metadata, per-file stats and its diff against its
+/// first parent. Diffs over [`MAX_DIFF_BYTES`] are left out
+/// (`diff_truncated`).
 pub async fn show_commit(repo_path: &Path, sha: &str) -> Result<CommitDetail> {
     validate_ref(sha)?;
 
-    // 1. Fetch metadata via git log -1.
-    let output = Command::new("git")
-        .args([
-            "log",
-            "-1",
-            "--format=%H%n%an%n%ae%n%aI%n%cn%n%ce%n%cI%n%P%n%s%n%b%n---END---",
-            sha,
-        ])
-        .current_dir(repo_path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| DeltaError::Storage(format!("failed to run git log: {}", e)))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::error!("git log -1 failed: {}", stderr);
+    // 1. Metadata, as NUL-terminated fields (see `log`).
+    let meta = output_capped(
+        Command::new("git")
+            .args([
+                "log",
+                "-1",
+                "-z",
+                "--format=%H%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%P%x00%s%x00%b",
+                sha,
+            ])
+            .current_dir(repo_path),
+        MAX_LISTING_BYTES,
+    )
+    .await?;
+    if !meta.status.success() && !meta.truncated {
+        tracing::error!("git log -1 failed: {}", meta.stderr);
         return Err(DeltaError::Storage("git log failed".into()));
     }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let lines: Vec<&str> = stdout.lines().collect();
-    if lines.len() < 9 {
+    let fields: Vec<String> = meta
+        .stdout
+        .split(|&b| b == 0)
+        .map(|f| String::from_utf8_lossy(f).into_owned())
+        .collect();
+    let commit_sha = fields.first().cloned().unwrap_or_default();
+    if fields.len() < 10
+        || !matches!(commit_sha.len(), 40 | 64)
+        || !commit_sha.bytes().all(|b| b.is_ascii_hexdigit())
+    {
         return Err(DeltaError::Storage(
             "unexpected git log output format".into(),
         ));
     }
+    let parents: Vec<String> = fields[7].split_whitespace().map(str::to_string).collect();
 
-    let commit_sha = lines[0].to_string();
-    let author_name = lines[1].to_string();
-    let author_email = lines[2].to_string();
-    let author_date = lines[3].to_string();
-    let committer_name = lines[4].to_string();
-    let committer_email = lines[5].to_string();
-    let committer_date = lines[6].to_string();
-    let parents: Vec<String> = lines[7].split_whitespace().map(|s| s.to_string()).collect();
-    let message = lines[8].to_string();
-
-    // Body: everything between subject line and ---END--- marker.
-    let body = {
-        let after_subject = &lines[9..];
-        let end_idx = after_subject
-            .iter()
-            .position(|l| *l == "---END---")
-            .unwrap_or(after_subject.len());
-        after_subject[..end_idx].join("\n").trim().to_string()
+    // Compare with the first parent; a root commit with nothing
+    // (`diff-tree --root`).
+    let diff_command = |options: &[&str]| {
+        let mut command = Command::new("git");
+        command
+            .args(["-c", "core.quotePath=false"])
+            .current_dir(repo_path);
+        match parents.first() {
+            Some(parent) => command
+                .arg("diff")
+                .args(options)
+                .args([parent.as_str(), commit_sha.as_str()]),
+            None => command
+                .args(["diff-tree", "-r", "--root", "--no-commit-id"])
+                .args(options)
+                .arg(&commit_sha),
+        };
+        command
     };
 
-    // 2. Fetch numstat for file-level stats.
-    let stat_output = Command::new("git")
-        .args([
-            "diff",
-            "--numstat",
-            &format!("{}^..{}", commit_sha, commit_sha),
-        ])
-        .current_dir(repo_path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await;
+    // 2. Per-file stats.
+    let numstat = output_capped(&mut diff_command(&["--numstat", "-z"]), MAX_LISTING_BYTES).await?;
+    let stats = crate::diff::parse_numstat_z(&numstat.stdout)
+        .into_iter()
+        .map(|(additions, deletions, path)| CommitFileStat {
+            path,
+            additions,
+            deletions,
+        })
+        .collect();
 
-    let mut stats = Vec::new();
-    // For root commits (no parent), diff sha^..sha fails. Fall back to
-    // diff-tree against empty tree.
-    let stat_stdout = match stat_output {
-        Ok(ref o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
-        _ => {
-            // Root commit: diff against empty tree.
-            let empty_tree = "4b825dc642cb6eb9a060e54bf899d15006c1b7a8";
-            let fallback = Command::new("git")
-                .args(["diff", "--numstat", empty_tree, &commit_sha])
-                .current_dir(repo_path)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output()
-                .await
-                .map_err(|e| DeltaError::Storage(format!("failed to run git diff: {}", e)))?;
-            String::from_utf8_lossy(&fallback.stdout).to_string()
-        }
-    };
-
-    for line in stat_stdout.lines() {
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() >= 3 {
-            stats.push(CommitFileStat {
-                additions: parts[0].parse::<i64>().unwrap_or(0),
-                deletions: parts[1].parse::<i64>().unwrap_or(0),
-                path: parts[2].to_string(),
-            });
-        }
-    }
-
-    // 3. Fetch unified diff.
-    let diff_output = Command::new("git")
-        .args(["diff", &format!("{}^..{}", commit_sha, commit_sha)])
-        .current_dir(repo_path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await;
-
-    let diff = match diff_output {
-        Ok(ref o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
-        _ => {
-            // Root commit fallback.
-            let empty_tree = "4b825dc642cb6eb9a060e54bf899d15006c1b7a8";
-            let fallback = Command::new("git")
-                .args(["diff", empty_tree, &commit_sha])
-                .current_dir(repo_path)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output()
-                .await
-                .map_err(|e| DeltaError::Storage(format!("failed to run git diff: {}", e)))?;
-            String::from_utf8_lossy(&fallback.stdout).to_string()
-        }
+    // 3. The unified diff.
+    let diff_output = output_capped(&mut diff_command(&["-p"]), MAX_DIFF_BYTES).await?;
+    let diff_truncated = diff_output.truncated;
+    let diff = if diff_truncated {
+        String::new()
+    } else {
+        String::from_utf8_lossy(&diff_output.stdout).into_owned()
     };
 
     Ok(CommitDetail {
         sha: commit_sha,
-        author_name,
-        author_email,
-        author_date,
-        committer_name,
-        committer_email,
-        committer_date,
+        author_name: fields[1].clone(),
+        author_email: fields[2].clone(),
+        author_date: fields[3].clone(),
+        committer_name: fields[4].clone(),
+        committer_email: fields[5].clone(),
+        committer_date: fields[6].clone(),
         parents,
-        message,
-        body,
+        message: fields[8].clone(),
+        body: fields[9].trim().to_string(),
         diff,
+        diff_truncated,
         stats,
     })
 }

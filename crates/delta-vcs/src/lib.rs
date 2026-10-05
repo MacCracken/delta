@@ -8,6 +8,7 @@ pub mod checkout;
 pub mod diff;
 pub mod hosting;
 pub mod merge;
+mod process;
 pub mod protocol;
 pub mod refs;
 mod validate;

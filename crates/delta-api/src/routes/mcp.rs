@@ -505,9 +505,17 @@ async fn handle_read_file(state: &AppState, args: &serde_json::Value) -> ToolRes
         .repo_host
         .repo_path(owner, name)
         .map_err(|e| error_result(StatusCode::BAD_REQUEST, &e.to_string()))?;
-    let content = delta_vcs::browse::read_blob_text(&repo_path, rev, path)
-        .await
-        .map_err(|e| error_result(StatusCode::NOT_FOUND, &e.to_string()))?;
+    let content = delta_vcs::browse::read_blob_text(
+        &repo_path,
+        rev,
+        path,
+        crate::helpers::MAX_TEXT_FILE_BYTES,
+    )
+    .await
+    .map_err(|e| {
+        let (status, message) = crate::helpers::vcs_error(e, StatusCode::NOT_FOUND);
+        error_result(status, &message)
+    })?;
     ok_text(content)
 }
 

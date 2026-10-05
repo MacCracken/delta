@@ -18,6 +18,9 @@ use crate::extractors::AuthUser;
 use crate::helpers::{require_role, resolve_repo_authed};
 use crate::state::AppState;
 
+/// Largest file the workspace file API returns.
+const MAX_WORKSPACE_READ_BYTES: u64 = 10 * 1024 * 1024;
+
 /// Per-workspace lock map to prevent concurrent commit races.
 pub type WorkspaceLocks = Arc<dashmap::DashMap<String, Arc<Mutex<()>>>>;
 
@@ -397,9 +400,9 @@ async fn read_file(
         .repo_path(&owner, &name)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 
-    delta_vcs::browse::read_blob_text(&repo_path, &ws.branch, &path)
+    delta_vcs::browse::read_blob_text(&repo_path, &ws.branch, &path, MAX_WORKSPACE_READ_BYTES)
         .await
-        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))
+        .map_err(|e| crate::helpers::vcs_error(e, StatusCode::NOT_FOUND))
 }
 
 async fn list_tree(
@@ -613,7 +616,7 @@ async fn diff_workspace(
 
     delta_vcs::diff::diff_refs(&repo_path, &ws.base_branch, &ws.branch)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        .map_err(|e| crate::helpers::vcs_error(e, StatusCode::INTERNAL_SERVER_ERROR))
 }
 
 /// Cleanup task: expire workspaces past their TTL.
