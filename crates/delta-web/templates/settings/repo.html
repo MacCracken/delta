@@ -198,34 +198,8 @@ select.form-control {
   <h2>Collaborators</h2>
   <div class="card">
     <div class="card-body">
-      {% if collaborators.is_empty() %}
-      <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 16px;">No collaborators have been added yet.</p>
-      {% else %}
-      <table class="collab-table">
-        <thead>
-          <tr>
-            <th>User</th>
-            <th>Role</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for c in collaborators %}
-          <tr>
-            <td data-label="User"><a href="/{{ c.username }}">{{ c.username }}</a></td>
-            <td data-label="Role">
-              <select>
-                <option value="read"{% if c.role == "read" %} selected{% endif %}>Read</option>
-                <option value="write"{% if c.role == "write" %} selected{% endif %}>Write</option>
-                <option value="admin"{% if c.role == "admin" %} selected{% endif %}>Admin</option>
-              </select>
-            </td>
-            <td><button class="btn" style="font-size: 12px; padding: 4px 10px;">Remove</button></td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      {% endif %}
+      {# Membership is only visible to repository admins via the API. #}
+      <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 16px;">Collaborators are visible to repository admins via <code>GET /api/v1/repos/{{ owner }}/{{ repo }}/collaborators</code>.</p>
 
       <div class="invite-form">
         <div class="form-group">
@@ -250,21 +224,8 @@ select.form-control {
   <h2>Branch Protection</h2>
   <div class="card">
     <div class="card-body">
-      {% if protections.is_empty() %}
-      <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 16px;">No branch protection rules configured.</p>
-      {% else %}
-      <div class="protection-list">
-        {% for rule in protections %}
-        <div class="protection-item">
-          <div>
-            <code>{{ rule.branch_pattern }}</code>
-            <span class="protection-detail">&mdash; {{ rule.required_approvals }} required approval{% if rule.required_approvals != 1 %}s{% endif %}</span>
-          </div>
-          <button class="btn" style="font-size: 12px; padding: 4px 10px;">Delete</button>
-        </div>
-        {% endfor %}
-      </div>
-      {% endif %}
+      {# Protection rules are only visible to repository admins via the API. #}
+      <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 16px;">Branch protection rules are visible to repository admins via <code>GET /api/v1/repos/{{ owner }}/{{ repo }}/branch-protections</code>.</p>
 
       <div class="protection-form">
         <div class="form-group">

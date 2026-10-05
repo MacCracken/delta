@@ -920,7 +920,6 @@ async fn repo_settings(
 ) -> WebResult {
     let repo_record = resolve_public_repo(&state, &owner, &repo).await?;
 
-    let repo_id = repo_record.id.to_string();
     let repo_path = state
         .repo_host
         .repo_path(&owner, &repo)
@@ -932,34 +931,6 @@ async fn repo_settings(
         .map(|b| b.name)
         .collect();
 
-    // Collaborators
-    let raw_collabs = db::collaborator::list_for_repo(&state.db, &repo_id)
-        .await
-        .unwrap_or_default();
-    let mut collaborators = Vec::new();
-    for c in &raw_collabs {
-        let username = db::user::get_by_id(&state.db, &c.user_id.to_string())
-            .await
-            .map(|u| u.username)
-            .unwrap_or_else(|_| "unknown".into());
-        collaborators.push(delta_web::settings::CollaboratorEntry {
-            username,
-            role: format!("{:?}", c.role).to_lowercase(),
-        });
-    }
-
-    // Branch protections
-    let raw_protections = db::branch_protection::list_for_repo(&state.db, &repo_id)
-        .await
-        .unwrap_or_default();
-    let protections: Vec<delta_web::settings::ProtectionEntry> = raw_protections
-        .into_iter()
-        .map(|p| delta_web::settings::ProtectionEntry {
-            branch_pattern: p.pattern,
-            required_approvals: p.required_approvals,
-        })
-        .collect();
-
     let page = delta_web::settings::RepoSettingsPage {
         owner,
         repo,
@@ -967,8 +938,6 @@ async fn repo_settings(
         visibility: repo_record.visibility.as_str().to_string(),
         default_branch: repo_record.default_branch,
         branches,
-        collaborators,
-        protections,
     };
 
     Ok(render_template(page))

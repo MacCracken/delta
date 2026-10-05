@@ -582,7 +582,7 @@ async fn ai_query_repo(
     for commit in &recent_commits {
         context.push_str(&format!(
             "  {} - {} ({})\n",
-            &commit.sha[..8.min(commit.sha.len())],
+            commit.sha.chars().take(8).collect::<String>(),
             commit.message,
             commit.author_name
         ));
@@ -591,12 +591,7 @@ async fn ai_query_repo(
     if let Some(readme) = &readme_content {
         context.push_str("\n## README.md\n");
         // Truncate README if very long
-        let readme_truncated = if readme.len() > 4000 {
-            &readme[..4000]
-        } else {
-            readme
-        };
-        context.push_str(readme_truncated);
+        context.push_str(delta_core::ai::truncate_for_context(readme, 4000));
         context.push('\n');
     }
 
@@ -611,11 +606,7 @@ async fn ai_query_repo(
     for file_path in &relevant_files {
         if let Ok(content) = delta_vcs::browse::read_blob_text(&repo_path, "HEAD", file_path).await
         {
-            let truncated = if content.len() > 2000 {
-                &content[..2000]
-            } else {
-                &content
-            };
+            let truncated = delta_core::ai::truncate_for_context(&content, 2000);
             context.push_str(&format!(
                 "\n## File: {}\n```\n{}\n```\n",
                 file_path, truncated

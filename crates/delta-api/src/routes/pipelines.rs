@@ -203,6 +203,14 @@ async fn get_job_logs(
     if run.repo_id != repo.id.to_string() {
         return Err((StatusCode::NOT_FOUND, "pipeline not found".into()));
     }
+    // The job must belong to the pipeline checked above, or any job's logs
+    // could be read through any accessible pipeline.
+    let job = db::pipeline::get_job(&state.db, &job_id)
+        .await
+        .map_err(|_| (StatusCode::NOT_FOUND, "job not found".to_string()))?;
+    if job.pipeline_id != run.id {
+        return Err((StatusCode::NOT_FOUND, "job not found".into()));
+    }
     let logs = db::pipeline::get_step_logs(&state.db, &job_id)
         .await
         .map_err(|e| {
