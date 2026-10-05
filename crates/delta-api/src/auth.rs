@@ -1,14 +1,14 @@
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
+use argon2::Argon2;
+use argon2::password_hash::{PasswordHasher, PasswordVerifier, phc::PasswordHash};
 use delta_core::models::user::User;
 use delta_core::{DeltaError, Result, db};
 use sqlx::SqlitePool;
 
 /// Hash a password with argon2.
 pub fn hash_password(password: &str) -> Result<String> {
-    let salt = SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
-    let argon2 = Argon2::default();
-    let hash = argon2
-        .hash_password(password.as_bytes(), &salt)
+    // A random salt is generated internally from the OS RNG.
+    let hash = Argon2::default()
+        .hash_password(password.as_bytes())
         .map_err(|e| DeltaError::AuthFailed(e.to_string()))?;
     Ok(hash.to_string())
 }

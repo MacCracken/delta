@@ -2,27 +2,18 @@
 
 Tracking dependency advisories, upgrade blockers, and security items that require upstream fixes or design decisions before resolution.
 
-Last reviewed: 2026-03-10
+Last reviewed: 2026-10-05
 
 ## Active Advisories
 
-### RUSTSEC-2025-0140 — gix-date non-utf8 string
-
-- **Crate:** `gix-date` 0.10.7 (via `gix` 0.72)
-- **Severity:** Low
-- **Issue:** `TimeBuf::as_str` can create non-utf8 `&str`
-- **Fix:** Upgrade to `gix-date` >= 0.12.0 (requires `gix` bump)
-- **Status:** Waiting — `gix` 0.72 pins older `gix-date`. Monitor for `gix` release with updated `gix-date`.
-- **Tracking:** <https://rustsec.org/advisories/RUSTSEC-2025-0140>
-
 ### RUSTSEC-2023-0071 — rsa timing sidechannel (Marvin Attack)
 
-- **Crate:** `rsa` 0.9.10 (via `sqlx-mysql` 0.8.6)
+- **Crate:** `rsa` 0.10.0-rc (via `russh` 0.64 / `ssh-key` 0.7)
 - **Severity:** Medium (5.9)
-- **Issue:** Potential key recovery through timing sidechannels
-- **Impact:** None — Delta does not use MySQL. `rsa` is only pulled in by `sqlx-mysql` which is an unused transitive dependency.
-- **Fix:** No upstream fix available. Will resolve when sqlx drops rsa or rsa releases a fix.
-- **Status:** No action needed — not in active dependency tree for our targets.
+- **Issue:** Potential key recovery through timing sidechannels in RSA private-key operations
+- **Impact:** None in practice — the SSH server only *verifies* RSA client signatures (public-key operations) and its host key is Ed25519, so no RSA private-key operation ever runs. (`sqlx` 0.9 no longer pulls `rsa` into the active dependency tree.)
+- **Fix:** No upstream fix available.
+- **Status:** No action needed; re-check when `russh`/`ssh-key` move to a patched `rsa`.
 - **Tracking:** <https://rustsec.org/advisories/RUSTSEC-2023-0071>
 
 ## Pending Security Work
@@ -59,6 +50,10 @@ Implemented BLAKE3 stream cipher encryption in `delta-core/src/crypto.rs`. Key d
 - When all active advisories above are resolved, consider removing `continue-on-error` from `cargo audit` to enforce a clean audit gate.
 
 ## Resolved
+
+### 2026-10-05 — RUSTSEC-2025-0140 (gix-date non-utf8 string)
+
+- Resolved by upgrading `gix` 0.72 → 0.88, which depends on `gix-date` 0.17 (fixed in >= 0.12)
 
 ### 2026-03-10 — SSRF protection for webhooks
 

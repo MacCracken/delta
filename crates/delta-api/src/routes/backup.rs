@@ -93,13 +93,17 @@ async fn create_snapshot(
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
         let backup_path = backup_dir.join(format!("delta_{}.db", timestamp));
 
-        let sql = format!("VACUUM INTO '{}'", backup_path.display());
-        sqlx::query(&sql).execute(&state.db).await.map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("backup failed: {}", e),
-            )
-        })?;
+        // Bind the target path instead of quoting it into the statement.
+        sqlx::query("VACUUM INTO ?")
+            .bind(backup_path.to_string_lossy().into_owned())
+            .execute(&state.db)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("backup failed: {}", e),
+                )
+            })?;
 
         let size = std::fs::metadata(&backup_path)
             .map(|m| m.len())

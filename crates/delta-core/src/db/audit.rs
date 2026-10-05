@@ -166,7 +166,8 @@ pub async fn list_for_export(
     }
     sql.push_str(" ORDER BY created_at ASC LIMIT ? OFFSET ?");
 
-    let mut query = sqlx::query_as::<_, AuditRow>(&sql);
+    // Only static fragments and `?` placeholders are appended above; values are bound.
+    let mut query = sqlx::query_as::<_, AuditRow>(sqlx::AssertSqlSafe(sql));
     for b in &binds {
         query = query.bind(b);
     }
@@ -203,7 +204,8 @@ pub async fn count_for_export(
         binds.push(rt.to_string());
     }
 
-    let mut query = sqlx::query_scalar::<_, i64>(&sql);
+    // Only static fragments and `?` placeholders are appended above; values are bound.
+    let mut query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql));
     for b in &binds {
         query = query.bind(b);
     }

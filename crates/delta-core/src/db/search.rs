@@ -96,7 +96,8 @@ pub async fn search_global(
         placeholders.join(","),
     );
 
-    let mut query_builder = sqlx::query_as::<_, SearchRow>(&sql);
+    // `sql` only interpolates a list of `?` placeholders; every value is bound.
+    let mut query_builder = sqlx::query_as::<_, SearchRow>(sqlx::AssertSqlSafe(sql));
     for id in repo_ids {
         query_builder = query_builder.bind(id);
     }

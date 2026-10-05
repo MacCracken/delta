@@ -3,12 +3,14 @@
 use delta_core::db::pipeline::PipelineRun;
 
 /// Truncate a SHA to 8 characters.
-pub fn truncate_sha(s: &str) -> askama::Result<String> {
+#[askama::filter_fn]
+pub fn truncate_sha(s: &str, _: &dyn askama::Values) -> askama::Result<String> {
     Ok(s.chars().take(8).collect())
 }
 
 /// Compute a human-readable duration string for a pipeline.
-pub fn pipeline_duration(p: &PipelineRun) -> askama::Result<String> {
+#[askama::filter_fn]
+pub fn pipeline_duration(p: &PipelineRun, _: &dyn askama::Values) -> askama::Result<String> {
     let Some(started) = &p.started_at else {
         return Ok("--".to_string());
     };

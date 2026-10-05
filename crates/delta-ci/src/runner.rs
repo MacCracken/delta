@@ -286,7 +286,7 @@ async fn run_pipelines(
             // Store step logs (mask secret values)
             for (idx, step) in result.steps.iter().enumerate() {
                 let mut output = format!("{}{}", step.stdout, step.stderr);
-                for (_, secret_value) in ctx.secrets.iter() {
+                for secret_value in ctx.secrets.values() {
                     if !secret_value.is_empty() {
                         // Case-insensitive masking (char-safe for UTF-8)
                         let lower_secret = secret_value.to_lowercase();

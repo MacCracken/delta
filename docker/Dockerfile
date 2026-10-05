@@ -1,6 +1,6 @@
 # Delta — multi-stage production build on AGNOS
 # Stage 1: Build
-FROM rust:1.85-bookworm AS builder
+FROM rust:1.99-bookworm AS builder
 
 RUN apt-get update && apt-get install -y \
     cmake pkg-config libssl-dev git \
@@ -15,8 +15,10 @@ FROM ghcr.io/maccracken/agnosticos:latest
 
 USER root
 
+# ca-certificates: outbound TLS (webhooks, federation, AI providers) verifies
+# against the system trust store.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
+    ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -g 1003 delta && useradd -u 1003 -g delta -d /var/lib/delta -s /usr/sbin/nologin delta

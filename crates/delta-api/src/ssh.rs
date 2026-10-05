@@ -11,8 +11,8 @@ use delta_core::db;
 use delta_core::models::collaborator::CollaboratorRole;
 use delta_core::models::repo::Visibility;
 use russh::keys::{self as russh_keys, HashAlg, PrivateKey, PublicKey};
-use russh::server::{Auth, Handler, Msg, Server, Session};
-use russh::{Channel, ChannelId, CryptoVec};
+use russh::server::{Auth, ChannelOpenHandle, Handler, Msg, Server, Session};
+use russh::{Channel, ChannelId, ChannelOpenFailure};
 use sqlx::SqlitePool;
 use tokio::sync::Mutex;
 
@@ -86,10 +86,14 @@ impl Handler for SshSession {
     async fn channel_open_session(
         &mut self,
         channel: Channel<Msg>,
+        reply: ChannelOpenHandle,
         _session: &mut Session,
-    ) -> Result<bool, Self::Error> {
+    ) -> Result<(), Self::Error> {
         if self.user.is_none() {
-            return Ok(false);
+            reply
+                .reject(ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
         }
         self.channels.lock().await.insert(
             channel.id(),
@@ -98,7 +102,8 @@ impl Handler for SshSession {
                 command: None,
             },
         );
-        Ok(true)
+        reply.accept().await;
+        Ok(())
     }
 
     async fn exec_request(
@@ -123,7 +128,7 @@ impl Handler for SshSession {
             Some(parsed) => parsed,
             None => {
                 let msg = format!("invalid repository path: {}\n", repo_path);
-                session.data(channel_id, CryptoVec::from(msg.as_bytes()))?;
+                session.data(channel_id, msg.into_bytes())?;
                 session.close(channel_id)?;
                 return Ok(());
             }
@@ -140,7 +145,7 @@ impl Handler for SshSession {
 
         if let Err(msg) = self.authorize(&service, &owner, &repo_name, &user_id).await {
             let err = format!("ERROR: {}\n", msg);
-            session.data(channel_id, CryptoVec::from(err.as_bytes()))?;
+            session.data(channel_id, err.into_bytes())?;
             session.close(channel_id)?;
             return Ok(());
         }
@@ -158,7 +163,7 @@ impl Handler for SshSession {
 
         if !disk_path.exists() {
             let msg = format!("repository not found: {}/{}\n", owner, repo_name);
-            session.data(channel_id, CryptoVec::from(msg.as_bytes()))?;
+            session.data(channel_id, msg.into_bytes())?;
             session.close(channel_id)?;
             return Ok(());
         }
@@ -168,11 +173,11 @@ impl Handler for SshSession {
             let output = delta_vcs::protocol::upload_pack(&disk_path, &[]).await;
             match output {
                 Ok(data) => {
-                    session.data(channel_id, CryptoVec::from_slice(&data))?;
+                    session.data(channel_id, data)?;
                 }
                 Err(e) => {
                     let msg = format!("git error: {}\n", e);
-                    session.data(channel_id, CryptoVec::from(msg.as_bytes()))?;
+                    session.data(channel_id, msg.into_bytes())?;
                 }
             }
             session.exit_status_request(channel_id, 0)?;
@@ -237,12 +242,12 @@ impl Handler for SshSession {
         let output = delta_vcs::protocol::receive_pack(&disk_path, &input).await;
         match output {
             Ok(data) => {
-                session.data(channel_id, CryptoVec::from_slice(&data))?;
+                session.data(channel_id, data)?;
                 session.exit_status_request(channel_id, 0)?;
             }
             Err(e) => {
                 let msg = format!("git error: {}\n", e);
-                session.data(channel_id, CryptoVec::from(msg.as_bytes()))?;
+                session.data(channel_id, msg.into_bytes())?;
                 session.exit_status_request(channel_id, 1)?;
             }
         }
@@ -393,11 +398,12 @@ fn load_or_generate_host_key(
 
     // Generate new ed25519 key
     tracing::info!(path = %key_path.display(), "generating new SSH host key");
-    let key = PrivateKey::random(
-        &mut russh_keys::ssh_key::rand_core::OsRng,
-        russh_keys::Algorithm::Ed25519,
-    )
-    .map_err(|e| anyhow::anyhow!("failed to generate SSH host key: {}", e))?;
+    let mut seed = [0u8; 32];
+    getrandom::fill(&mut seed)
+        .map_err(|e| anyhow::anyhow!("failed to generate SSH host key: {}", e))?;
+    let key = PrivateKey::from(russh_keys::ssh_key::private::Ed25519Keypair::from_seed(
+        &seed,
+    ));
 
     // Ensure parent directory exists
     if let Some(parent) = key_path.parent() {
