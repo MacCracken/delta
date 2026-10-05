@@ -12,6 +12,11 @@ pub struct Server {
 
 /// Serve the full router on a random local port.
 pub async fn start_server() -> Server {
+    start_server_with(|config| config.rate_limit.enabled = false).await
+}
+
+/// Like [`start_server`], with a chance to adjust the configuration.
+pub async fn start_server_with(configure: impl FnOnce(&mut DeltaConfig)) -> Server {
     let tmp = tempfile::tempdir().unwrap();
     let mut config = DeltaConfig::default();
     config.storage.repos_dir = tmp.path().join("repos");
@@ -20,10 +25,10 @@ pub async fn start_server() -> Server {
         "sqlite://{}?mode=rwc",
         tmp.path().join("delta.db").display()
     );
-    config.rate_limit.enabled = false;
     std::fs::create_dir_all(&config.storage.repos_dir).unwrap();
     std::fs::create_dir_all(&config.storage.artifacts_dir).unwrap();
 
+    configure(&mut config);
     let pool = delta_core::db::init_pool(&config.storage.db_url)
         .await
         .unwrap();
@@ -31,7 +36,12 @@ pub async fn start_server() -> Server {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
     });
     Server {
         base: format!("http://{addr}"),

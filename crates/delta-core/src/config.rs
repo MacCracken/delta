@@ -34,6 +34,11 @@ pub struct ServerConfig {
     /// Allowed CORS origins. Empty list means allow any origin (dev only).
     #[serde(default)]
     pub cors_origins: Vec<String>,
+    /// Identify clients by the right-most `X-Forwarded-For` entry instead of
+    /// the TCP peer address. Enable only behind a reverse proxy that sets
+    /// the header; otherwise clients can choose their own rate-limit key.
+    #[serde(default)]
+    pub trust_forwarded_for: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -301,6 +306,7 @@ impl Default for DeltaConfig {
                 port: 8070,
                 api_prefix: "/api/v1".into(),
                 cors_origins: vec![],
+                trust_forwarded_for: false,
             },
             storage: StorageConfig {
                 repos_dir: PathBuf::from("/var/lib/delta/repos"),

@@ -188,7 +188,12 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    axum::serve(listener, app).await?;
+    // Peer addresses identify clients for rate limiting.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
