@@ -98,19 +98,19 @@ fn validate_path(path: &str) -> Result<()> {
 /// List entries in a git tree at the given revision and path.
 ///
 /// Returns tree entries sorted with directories first, then files,
-/// alphabetically within each group.
+/// alphabetically within each group. `path` names a directory ("" for the
+/// root); entry paths are relative to the repository root.
 pub async fn list_tree(repo_path: &Path, rev: &str, path: &str) -> Result<Vec<TreeEntry>> {
     validate_ref(rev)?;
     validate_path(path)?;
 
-    let mut args = vec!["ls-tree".to_string()];
-
-    if path.is_empty() {
-        args.push(rev.to_string());
-    } else {
-        args.push(rev.to_string());
+    let mut args = vec!["ls-tree".to_string(), "-z".to_string(), rev.to_string()];
+    let dir = path.trim_end_matches('/');
+    if !dir.is_empty() {
+        // The trailing slash lists the directory's children rather than
+        // the directory entry itself.
         args.push("--".to_string());
-        args.push(path.to_string());
+        args.push(format!("{dir}/"));
     }
 
     let output = Command::new("git")
@@ -128,44 +128,22 @@ pub async fn list_tree(repo_path: &Path, rev: &str, path: &str) -> Result<Vec<Tr
         return Err(DeltaError::Storage("git ls-tree failed".into()));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut entries = Vec::new();
-
-    for line in stdout.lines() {
-        if line.is_empty() {
-            continue;
-        }
-        // Format: "mode type hash\tname"
-        let Some((meta, name)) = line.split_once('\t') else {
-            continue;
-        };
-        let parts: Vec<&str> = meta.split_whitespace().collect();
-        if parts.len() < 3 {
-            continue;
-        }
-
-        let entry_path = if path.is_empty() {
-            name.to_string()
-        } else {
-            // When ls-tree is given a directory path it returns entries with
-            // the full relative path already, so use it directly.
-            // When given a file path the name is just the filename component.
-            if name.contains('/') {
-                name.to_string()
-            } else {
-                let trimmed = path.trim_end_matches('/');
-                format!("{}/{}", trimmed, name)
-            }
-        };
-
-        entries.push(TreeEntry {
-            mode: parts[0].to_string(),
-            kind: parts[1].to_string(),
-            hash: parts[2].to_string(),
-            name: name.rsplit('/').next().unwrap_or(name).to_string(),
+    let mut entries: Vec<TreeEntry> = output
+        .stdout
+        .split(|&b| b == 0)
+        .filter_map(parse_ls_tree_record)
+        .map(|(mode, kind, hash, _size, entry_path)| TreeEntry {
+            name: entry_path
+                .rsplit('/')
+                .next()
+                .unwrap_or(&entry_path)
+                .to_string(),
+            mode,
+            kind,
+            hash,
             path: entry_path,
-        });
-    }
+        })
+        .collect();
 
     // Sort: trees (directories) first, then blobs, alphabetical within groups.
     entries.sort_by(|a, b| {
@@ -177,6 +155,56 @@ pub async fn list_tree(repo_path: &Path, rev: &str, path: &str) -> Result<Vec<Tr
     });
 
     Ok(entries)
+}
+
+/// A file in a recursive tree listing.
+#[derive(Debug, Clone)]
+pub struct BlobEntry {
+    pub path: String,
+    pub size: u64,
+}
+
+/// List every file (blob) reachable from `rev`, with its size, using a
+/// single `git ls-tree -r` (no per-directory recursion).
+pub async fn list_blobs(repo_path: &Path, rev: &str) -> Result<Vec<BlobEntry>> {
+    validate_ref(rev)?;
+    let output = Command::new("git")
+        .args(["ls-tree", "-r", "-z", "-l", rev])
+        .current_dir(repo_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| DeltaError::Storage(format!("failed to run git ls-tree: {}", e)))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        tracing::error!("git ls-tree -r failed: {}", stderr);
+        return Err(DeltaError::Storage("git ls-tree failed".into()));
+    }
+    Ok(output
+        .stdout
+        .split(|&b| b == 0)
+        .filter_map(parse_ls_tree_record)
+        .filter(|(_, kind, _, _, _)| kind == "blob")
+        .map(|(_, _, _, size, path)| BlobEntry {
+            path,
+            size: size.unwrap_or(0),
+        })
+        .collect())
+}
+
+/// Parse one NUL-terminated `git ls-tree -z [-l]` record:
+/// `<mode> <type> <hash>[ <size>]\t<path>`.
+fn parse_ls_tree_record(record: &[u8]) -> Option<(String, String, String, Option<u64>, String)> {
+    let tab = record.iter().position(|&b| b == b'\t')?;
+    let meta = std::str::from_utf8(&record[..tab]).ok()?;
+    let path = String::from_utf8_lossy(&record[tab + 1..]).into_owned();
+    let mut parts = meta.split_whitespace();
+    let mode = parts.next()?.to_string();
+    let kind = parts.next()?.to_string();
+    let hash = parts.next()?.to_string();
+    let size = parts.next().and_then(|s| s.parse().ok());
+    Some((mode, kind, hash, size, path))
 }
 
 // ---------------------------------------------------------------------------

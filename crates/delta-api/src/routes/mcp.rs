@@ -397,16 +397,16 @@ async fn resolve_repo(
 // ---------------------------------------------------------------------------
 
 async fn handle_list_repos(state: &AppState, args: &serde_json::Value) -> ToolResult {
-    // Always use list_visible to exclude private repos (MCP is unauthenticated)
-    let owner_filter = if let Some(owner) = arg_str(args, "owner") {
-        let owner_id = resolve_owner(state, owner).await?;
-        Some(owner_id)
-    } else {
-        None
-    };
-    let repos = db::repo::list_visible(&state.db, owner_filter.as_deref())
+    // MCP is unauthenticated: list public repositories only. (The argument
+    // of list_visible is the *viewer*; passing the owner's id there would
+    // reveal that owner's private repositories.)
+    let mut repos = db::repo::list_visible(&state.db, None)
         .await
         .map_err(|e| error_result(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    if let Some(owner) = arg_str(args, "owner") {
+        let owner_id = resolve_owner(state, owner).await?;
+        repos.retain(|r| r.owner == owner_id);
+    }
     ok_json(&repos)
 }
 

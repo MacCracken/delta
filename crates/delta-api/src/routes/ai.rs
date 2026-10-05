@@ -708,18 +708,26 @@ async fn index_repo(
             )
         })?;
 
-    // Walk the tree and index all text files
-    let entries: Vec<String> = walk_tree_recursive(&repo_path, "HEAD", "").await;
+    // List all files in one pass and index the text files
+    let entries = delta_vcs::browse::list_blobs(&repo_path, "HEAD")
+        .await
+        .unwrap_or_default();
 
     let mut indexed = 0u64;
     let mut skipped = 0u64;
 
-    for entry_path in &entries {
-        // Read file content
+    for (n, entry) in entries.iter().enumerate() {
+        // Bound the work a single request can trigger, and never read
+        // very large files (> 1MB) into memory.
+        if n >= MAX_INDEXED_FILES || entry.size > MAX_INDEXED_FILE_SIZE {
+            skipped += 1;
+            continue;
+        }
+        let entry_path = &entry.path;
         match delta_vcs::browse::read_blob_text(&repo_path, "HEAD", entry_path).await {
             Ok(content) => {
-                // Skip very large files (> 1MB) and likely binary files
-                if content.len() > 1_048_576 || is_likely_binary(&content) {
+                // Skip likely binary files
+                if is_likely_binary(&content) {
                     skipped += 1;
                     continue;
                 }
@@ -745,30 +753,10 @@ async fn index_repo(
     })))
 }
 
-/// Recursively walk a git tree to get all blob paths.
-fn walk_tree_recursive<'a>(
-    repo_path: &'a std::path::Path,
-    rev: &'a str,
-    prefix: &'a str,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<String>> + Send + 'a>> {
-    Box::pin(async move {
-        let entries = match delta_vcs::browse::list_tree(repo_path, rev, prefix).await {
-            Ok(e) => e,
-            Err(_) => return Vec::new(),
-        };
-
-        let mut paths = Vec::new();
-        for entry in entries {
-            if entry.kind == "blob" {
-                paths.push(entry.path.clone());
-            } else if entry.kind == "tree" {
-                let sub = walk_tree_recursive(repo_path, rev, &entry.path).await;
-                paths.extend(sub);
-            }
-        }
-        paths
-    })
-}
+/// Maximum number of files indexed per repository.
+const MAX_INDEXED_FILES: usize = 20_000;
+/// Files larger than this are not indexed.
+const MAX_INDEXED_FILE_SIZE: u64 = 1_048_576;
 
 /// Check if content is likely binary (contains null bytes).
 fn is_likely_binary(content: &str) -> bool {
