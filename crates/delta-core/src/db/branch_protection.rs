@@ -64,14 +64,15 @@ pub async fn list_for_repo(pool: &SqlitePool, repo_id: &str) -> Result<Vec<Branc
     Ok(rows.into_iter().map(|r| r.into_protection()).collect())
 }
 
-/// Find the protection rule that matches a given branch name.
+/// Find the protection that applies to a branch: all matching rules
+/// combined, taking the most restrictive value of each setting.
 pub async fn find_matching(
     pool: &SqlitePool,
     repo_id: &str,
     branch: &str,
 ) -> Result<Option<BranchProtection>> {
     let protections = list_for_repo(pool, repo_id).await?;
-    Ok(protections.into_iter().find(|p| p.matches(branch)))
+    Ok(BranchProtection::effective(&protections, branch))
 }
 
 /// Delete a branch protection rule.

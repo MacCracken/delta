@@ -20,7 +20,11 @@ use tokio::sync::broadcast;
 pub struct PipelineContext<'a> {
     pub pool: &'a SqlitePool,
     pub repo_id: &'a str,
+    /// Working tree of the commit being built: workflows are read from it and
+    /// steps run in it. Must be a checkout, never the hosted bare repository.
     pub repo_path: &'a Path,
+    /// `$HOME` for locally executed steps.
+    pub home_dir: Option<&'a Path>,
     pub commit_sha: &'a str,
     pub secrets: &'a HashMap<String, String>,
     pub streams: Option<&'a PipelineStreams>,
@@ -39,6 +43,14 @@ pub async fn run_push_pipelines(ctx: &PipelineContext<'_>, branch: &str) {
         branch: branch.to_string(),
     };
     run_pipelines(ctx, &event, "push", Some(branch)).await;
+}
+
+/// Run all matching workflows for a pushed tag.
+pub async fn run_tag_pipelines(ctx: &PipelineContext<'_>, tag: &str) {
+    let event = Event::Tag {
+        tag_name: tag.to_string(),
+    };
+    run_pipelines(ctx, &event, "tag", Some(tag)).await;
 }
 
 /// Run pipelines for any event type.
@@ -130,6 +142,9 @@ async fn run_pipelines(
         env_vars.insert("DELTA_TRIGGER".into(), trigger_type.to_string());
         if let Some(r) = trigger_ref {
             env_vars.insert("DELTA_REF".into(), r.to_string());
+        }
+        if let Some(home) = ctx.home_dir {
+            env_vars.insert("HOME".into(), home.display().to_string());
         }
 
         let secret_needles = crate::mask::secret_needles(ctx.secrets.values().map(String::as_str));

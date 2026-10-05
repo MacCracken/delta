@@ -89,3 +89,11 @@ pub fn head_commit(repo_path: &Path) -> Result<Option<String>> {
         Err(_) => Ok(None), // Empty repo, no commits yet
     }
 }
+
+/// Object id a fully-qualified ref (e.g. `refs/heads/main`) points to, or
+/// `None` if the ref doesn't exist or is symbolic.
+pub fn ref_target(repo_path: &Path, refname: &str) -> Option<String> {
+    let repo = gix::open(repo_path).ok()?;
+    let reference = repo.try_find_reference(refname).ok()??;
+    Some(reference.try_id()?.to_hex().to_string())
+}

@@ -19,6 +19,8 @@ rust-version = "1.99"
 [workspace.dependencies]
 # Async runtime
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+futures-util = "0.3"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -28,7 +30,7 @@ toml = "1"
 # HTTP / API
 axum = { version = "0.8", features = ["macros", "ws"] }
 tower = "0.5"
-tower-http = { version = "0.7", features = ["cors", "trace", "compression-gzip"] }
+tower-http = { version = "0.7", features = ["cors", "trace", "compression-gzip", "decompression-gzip"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 url = "2"
 

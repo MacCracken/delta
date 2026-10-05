@@ -4,6 +4,7 @@
 //! ref management, diff generation, and merge execution.
 
 pub mod browse;
+pub mod checkout;
 pub mod diff;
 pub mod hosting;
 pub mod merge;
