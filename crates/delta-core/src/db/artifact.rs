@@ -162,3 +162,18 @@ impl ArtifactRow {
         }
     }
 }
+
+/// Whether any artifact, OCI blob, or OCI manifest still references the
+/// stored blob with this content hash. Identical content is stored once and
+/// shared, so a blob may only be removed once nothing references it.
+pub async fn blob_is_referenced(pool: &SqlitePool, content_hash: &str) -> Result<bool> {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM artifacts WHERE content_hash = ?1)
+             OR EXISTS(SELECT 1 FROM oci_repo_blobs WHERE content_hash = ?1)
+             OR EXISTS(SELECT 1 FROM oci_manifests WHERE content_hash = ?1)",
+    )
+    .bind(content_hash)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| DeltaError::Storage(e.to_string()))
+}

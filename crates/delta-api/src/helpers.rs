@@ -10,6 +10,10 @@ use crate::state::AppState;
 
 /// Strip `.git` suffix from a repository name segment.
 /// Used by git.rs and lfs.rs routes to normalize repo names.
+/// Request body limit for registry uploads (artifacts, OCI, LFS, ark).
+/// Without an explicit limit axum rejects bodies over 2 MiB.
+pub const MAX_UPLOAD_BYTES: usize = 100 * 1024 * 1024;
+
 pub fn strip_git_suffix(repo: &str) -> &str {
     repo.strip_suffix(".git").unwrap_or(repo)
 }

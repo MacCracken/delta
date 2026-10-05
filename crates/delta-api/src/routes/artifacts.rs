@@ -56,6 +56,9 @@ pub fn router() -> Router<AppState> {
             "/{owner}/{name}/releases/{tag}",
             get(get_release).delete(delete_release),
         )
+        .layer(axum::extract::DefaultBodyLimit::max(
+            crate::helpers::MAX_UPLOAD_BYTES,
+        ))
 }
 
 async fn list_artifacts(
@@ -217,7 +220,12 @@ async fn delete_artifact(
             )
         })?;
 
-    let _ = state.blob_store.delete(&artifact.content_hash);
+    if let Err(e) =
+        delta_registry::store::release_blob(&state.db, &state.blob_store, &artifact.content_hash)
+            .await
+    {
+        tracing::warn!("failed to release artifact blob: {}", e);
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

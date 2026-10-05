@@ -47,6 +47,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (14, include_str!("../migrations/014_admin_flag.sql")),
     (15, include_str!("../migrations/015_runners.sql")),
     (16, include_str!("../migrations/016_review_commit.sql")),
+    (17, include_str!("../migrations/017_blob_refs.sql")),
 ];
 
 /// Initialize the database connection pool and run migrations.

@@ -31,7 +31,7 @@ impl LfsStore {
             std::fs::create_dir_all(parent)?;
         }
 
-        std::fs::write(&path, data)?;
+        crate::store::write_atomically(&path, data)?;
         Ok(hash)
     }
 
@@ -54,7 +54,7 @@ impl LfsStore {
             std::fs::create_dir_all(parent)?;
         }
 
-        std::fs::write(&path, data)?;
+        crate::store::write_atomically(&path, data)?;
         Ok(())
     }
 

@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 
 use delta_core::models::collaborator::CollaboratorRole;
 
-use crate::extractors::AuthUser;
 use crate::helpers::{require_role, resolve_repo_authed};
 use crate::state::AppState;
 
@@ -40,12 +39,130 @@ pub fn router() -> Router<AppState> {
                 .delete(oci_delete_manifest),
         )
         .route("/v2/{owner}/{name}/tags/list", get(list_tags))
+        .layer(axum::extract::DefaultBodyLimit::max(
+            crate::helpers::MAX_UPLOAD_BYTES,
+        ))
+        .layer(axum::middleware::map_response(oci_auth_challenge))
+}
+
+/// Registry clients (docker, podman, skopeo) only send credentials after a
+/// 401 carrying a challenge, and expect errors in the distribution-spec
+/// JSON format.
+async fn oci_auth_challenge(response: axum::response::Response) -> axum::response::Response {
+    use axum::http::{HeaderValue, header};
+    if response.status() != StatusCode::UNAUTHORIZED {
+        return response;
+    }
+    let (mut parts, _) = response.into_parts();
+    parts.headers.insert(
+        header::WWW_AUTHENTICATE,
+        HeaderValue::from_static("Basic realm=\"Delta\""),
+    );
+    parts.headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    parts.headers.remove(header::CONTENT_LENGTH);
+    let body = r#"{"errors":[{"code":"UNAUTHORIZED","message":"authentication required"}]}"#;
+    axum::response::Response::from_parts(parts, axum::body::Body::from(body))
+}
+
+/// Caller identity on OCI routes: a Bearer token, or HTTP Basic
+/// `username:token` as sent by `docker login`. `None` without credentials.
+///
+/// Basic auth is accepted only here (and on git routes): browsers replay
+/// cached Basic credentials automatically, so accepting it API-wide would
+/// expose the rest of the API to cross-site requests.
+struct OciUser(Option<delta_core::models::user::User>);
+
+impl axum::extract::FromRequestParts<AppState> for OciUser {
+    type Rejection = (StatusCode, String);
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let Some(header) = parts
+            .headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+        else {
+            return Ok(OciUser(None));
+        };
+        let unauthorized = || (StatusCode::UNAUTHORIZED, "invalid credentials".to_string());
+        let user = if let Some(token) = header.strip_prefix("Bearer ") {
+            crate::auth::authenticate_token(&state.db, token)
+                .await
+                .map_err(|_| unauthorized())?
+        } else if let Some(encoded) = header.strip_prefix("Basic ") {
+            let decoded =
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
+                    .map_err(|_| unauthorized())?;
+            let decoded = String::from_utf8(decoded).map_err(|_| unauthorized())?;
+            let (username, token) = decoded.split_once(':').ok_or_else(unauthorized)?;
+            let user = crate::auth::authenticate_token(&state.db, token)
+                .await
+                .map_err(|_| unauthorized())?;
+            if user.username != username {
+                return Err(unauthorized());
+            }
+            user
+        } else {
+            return Err(unauthorized());
+        };
+        Ok(OciUser(Some(user)))
+    }
+}
+
+/// Require credentials (writes always do).
+fn require_user(
+    user: Option<delta_core::models::user::User>,
+) -> Result<delta_core::models::user::User, (StatusCode, String)> {
+    user.ok_or((StatusCode::UNAUTHORIZED, "authentication required".into()))
+}
+
+/// Resolve a repository for reading: public repositories are readable
+/// anonymously; anything else asks for credentials.
+async fn resolve_readable(
+    state: &AppState,
+    owner: &str,
+    name: &str,
+    user: Option<&delta_core::models::user::User>,
+) -> Result<
+    (
+        delta_core::models::repo::Repository,
+        delta_core::models::user::User,
+    ),
+    (StatusCode, String),
+> {
+    match user {
+        Some(user) => resolve_repo_authed(state, owner, name, user).await,
+        None => crate::helpers::resolve_repo(state, owner, name)
+            .await
+            .map_err(|_| (StatusCode::UNAUTHORIZED, "authentication required".into())),
+    }
 }
 
 // --- Version Check ---
 
-async fn version_check() -> (StatusCode, Json<serde_json::Value>) {
-    (StatusCode::OK, Json(serde_json::json!({})))
+/// `GET /v2/` — clients probe this to discover the auth scheme, so it
+/// requires credentials (`docker login` checks them here).
+async fn version_check(
+    OciUser(user): OciUser,
+) -> Result<
+    (
+        StatusCode,
+        [(&'static str, &'static str); 1],
+        Json<serde_json::Value>,
+    ),
+    (StatusCode, String),
+> {
+    require_user(user)?;
+    Ok((
+        StatusCode::OK,
+        [("Docker-Distribution-API-Version", "registry/2.0")],
+        Json(serde_json::json!({})),
+    ))
 }
 
 // --- Blobs ---
@@ -53,9 +170,9 @@ async fn version_check() -> (StatusCode, Json<serde_json::Value>) {
 async fn check_blob(
     State(state): State<AppState>,
     Path((owner, name, digest)): Path<(String, String, String)>,
-    AuthUser(user): AuthUser,
+    OciUser(user): OciUser,
 ) -> Result<(StatusCode, HeaderMap), (StatusCode, String)> {
-    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
+    let (repo, _) = resolve_readable(&state, &owner, &name, user.as_ref()).await?;
     let blob = db::oci::get_repo_blob(&state.db, &repo.id.to_string(), &digest)
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "blob not found".into()))?;
@@ -72,9 +189,9 @@ async fn check_blob(
 async fn pull_blob(
     State(state): State<AppState>,
     Path((owner, name, digest)): Path<(String, String, String)>,
-    AuthUser(user): AuthUser,
+    OciUser(user): OciUser,
 ) -> Result<(StatusCode, HeaderMap, Vec<u8>), (StatusCode, String)> {
-    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
+    let (repo, _) = resolve_readable(&state, &owner, &name, user.as_ref()).await?;
     let blob = db::oci::get_repo_blob(&state.db, &repo.id.to_string(), &digest)
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "blob not found".into()))?;
@@ -101,8 +218,9 @@ async fn pull_blob(
 async fn delete_blob(
     State(state): State<AppState>,
     Path((owner, name, digest)): Path<(String, String, String)>,
-    AuthUser(user): AuthUser,
+    OciUser(user): OciUser,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    let user = require_user(user)?;
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
 
@@ -120,7 +238,11 @@ async fn delete_blob(
             )
         })?;
 
-    let _ = state.blob_store.delete(&blob.content_hash);
+    if let Err(e) =
+        delta_registry::store::release_blob(&state.db, &state.blob_store, &blob.content_hash).await
+    {
+        tracing::warn!("failed to release OCI blob: {}", e);
+    }
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -134,7 +256,7 @@ struct UploadQuery {
 async fn initiate_upload(
     State(state): State<AppState>,
     Path((owner, name)): Path<(String, String)>,
-    AuthUser(user): AuthUser,
+    OciUser(user): OciUser,
     Query(query): Query<UploadQuery>,
     body: Bytes,
 ) -> Result<(StatusCode, HeaderMap), (StatusCode, String)> {
@@ -145,6 +267,7 @@ async fn initiate_upload(
         ));
     }
 
+    let user = require_user(user)?;
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
 
@@ -205,7 +328,7 @@ async fn initiate_upload(
 async fn upload_chunk(
     State(state): State<AppState>,
     Path((owner, name, uuid)): Path<(String, String, String)>,
-    AuthUser(user): AuthUser,
+    OciUser(user): OciUser,
     body: Bytes,
 ) -> Result<(StatusCode, HeaderMap), (StatusCode, String)> {
     if body.len() > MAX_UPLOAD_BODY_SIZE {
@@ -215,6 +338,7 @@ async fn upload_chunk(
         ));
     }
 
+    let user = require_user(user)?;
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
 
@@ -270,7 +394,7 @@ async fn upload_chunk(
 async fn complete_upload(
     State(state): State<AppState>,
     Path((owner, name, uuid)): Path<(String, String, String)>,
-    AuthUser(user): AuthUser,
+    OciUser(user): OciUser,
     Query(query): Query<UploadQuery>,
     body: Bytes,
 ) -> Result<(StatusCode, HeaderMap), (StatusCode, String)> {
@@ -281,6 +405,7 @@ async fn complete_upload(
         ));
     }
 
+    let user = require_user(user)?;
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
 
@@ -358,9 +483,9 @@ async fn complete_upload(
 async fn check_manifest(
     State(state): State<AppState>,
     Path((owner, name, reference)): Path<(String, String, String)>,
-    AuthUser(user): AuthUser,
+    OciUser(user): OciUser,
 ) -> Result<(StatusCode, HeaderMap), (StatusCode, String)> {
-    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
+    let (repo, _) = resolve_readable(&state, &owner, &name, user.as_ref()).await?;
     let manifest = resolve_manifest(&state, &repo.id.to_string(), &reference).await?;
 
     let mut headers = HeaderMap::new();
@@ -377,9 +502,9 @@ async fn check_manifest(
 async fn pull_manifest(
     State(state): State<AppState>,
     Path((owner, name, reference)): Path<(String, String, String)>,
-    AuthUser(user): AuthUser,
+    OciUser(user): OciUser,
 ) -> Result<(StatusCode, HeaderMap, Vec<u8>), (StatusCode, String)> {
-    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
+    let (repo, _) = resolve_readable(&state, &owner, &name, user.as_ref()).await?;
     let manifest = resolve_manifest(&state, &repo.id.to_string(), &reference).await?;
 
     let data = state.blob_store.read(&manifest.content_hash).map_err(|e| {
@@ -403,10 +528,11 @@ async fn pull_manifest(
 async fn push_manifest(
     State(state): State<AppState>,
     Path((owner, name, reference)): Path<(String, String, String)>,
-    AuthUser(user): AuthUser,
+    OciUser(user): OciUser,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<(StatusCode, HeaderMap), (StatusCode, String)> {
+    let user = require_user(user)?;
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
 
@@ -417,6 +543,32 @@ async fn push_manifest(
         .to_string();
 
     let digest = sha256_digest(&body);
+
+    // Validate the reference before storing anything: a digest reference
+    // must match the content, and a tag must be well-formed.
+    let tag = if reference.starts_with("sha256:") {
+        if reference != digest {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "manifest digest does not match the reference (DIGEST_INVALID)".into(),
+            ));
+        }
+        None
+    } else {
+        // Tag: 1-128 chars, alphanumeric/hyphens/dots/underscores
+        if reference.is_empty()
+            || reference.len() > 128
+            || !reference
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_')
+        {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "tag must be 1-128 characters: alphanumeric, hyphens, dots, or underscores".into(),
+            ));
+        }
+        Some(reference.as_str())
+    };
 
     // Store manifest in blob store
     let content_hash = state.blob_store.store(&body).map_err(|e| {
@@ -445,21 +597,9 @@ async fn push_manifest(
         )
     })?;
 
-    // If reference is a tag (not a digest), validate and create/update the tag
-    if !reference.starts_with("sha256:") {
-        // Validate tag: 1-128 chars, alphanumeric/hyphens/dots/underscores
-        if reference.is_empty()
-            || reference.len() > 128
-            || !reference
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_')
-        {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                "tag must be 1-128 characters: alphanumeric, hyphens, dots, or underscores".into(),
-            ));
-        }
-        db::oci::put_tag(&state.db, &repo_id, &reference, &manifest.id)
+    // If the reference is a tag (not a digest), create/update the tag
+    if let Some(tag) = tag {
+        db::oci::put_tag(&state.db, &repo_id, tag, &manifest.id)
             .await
             .map_err(|e| {
                 tracing::error!("failed to create tag: {}", e);
@@ -485,8 +625,9 @@ async fn push_manifest(
 async fn oci_delete_manifest(
     State(state): State<AppState>,
     Path((owner, name, reference)): Path<(String, String, String)>,
-    AuthUser(user): AuthUser,
+    OciUser(user): OciUser,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    let user = require_user(user)?;
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
 
@@ -502,7 +643,12 @@ async fn oci_delete_manifest(
             )
         })?;
 
-    let _ = state.blob_store.delete(&manifest.content_hash);
+    if let Err(e) =
+        delta_registry::store::release_blob(&state.db, &state.blob_store, &manifest.content_hash)
+            .await
+    {
+        tracing::warn!("failed to release OCI manifest blob: {}", e);
+    }
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -511,9 +657,9 @@ async fn oci_delete_manifest(
 async fn list_tags(
     State(state): State<AppState>,
     Path((owner, name)): Path<(String, String)>,
-    AuthUser(user): AuthUser,
+    OciUser(user): OciUser,
 ) -> Result<Json<TagListResponse>, (StatusCode, String)> {
-    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
+    let (repo, _) = resolve_readable(&state, &owner, &name, user.as_ref()).await?;
     let tags = db::oci::list_tags(&state.db, &repo.id.to_string())
         .await
         .map_err(|e| {

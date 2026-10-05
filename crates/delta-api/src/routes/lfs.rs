@@ -27,6 +27,9 @@ pub fn router() -> Router<AppState> {
             "/{owner}/{repo}/info/lfs/objects/{oid}",
             get(download).put(upload),
         )
+        .layer(axum::extract::DefaultBodyLimit::max(
+            crate::helpers::MAX_UPLOAD_BYTES,
+        ))
 }
 
 /// Strip `.git` suffix from repo segment.

@@ -34,8 +34,8 @@ pub async fn cleanup_repo(
     if let Some(days) = max_age_days {
         let expired = db::retention::find_expired_artifacts(pool, repo_id, days).await?;
         for artifact in &expired {
-            let _ = blob_store.delete(&artifact.content_hash);
             db::artifact::delete(pool, &artifact.id).await?;
+            crate::store::release_blob(pool, blob_store, &artifact.content_hash).await?;
         }
         report.expired_deleted = expired.len();
     }
@@ -44,8 +44,8 @@ pub async fn cleanup_repo(
     if let Some(count) = max_count {
         let excess = db::retention::find_excess_artifacts(pool, repo_id, count).await?;
         for artifact in &excess {
-            let _ = blob_store.delete(&artifact.content_hash);
             db::artifact::delete(pool, &artifact.id).await?;
+            crate::store::release_blob(pool, blob_store, &artifact.content_hash).await?;
         }
         report.excess_deleted = excess.len();
     }
@@ -54,8 +54,8 @@ pub async fn cleanup_repo(
     if let Some(max_bytes) = max_total_bytes {
         let oversize = db::retention::find_oversize_artifacts(pool, repo_id, max_bytes).await?;
         for artifact in &oversize {
-            let _ = blob_store.delete(&artifact.content_hash);
             db::artifact::delete(pool, &artifact.id).await?;
+            crate::store::release_blob(pool, blob_store, &artifact.content_hash).await?;
         }
         report.oversize_deleted = oversize.len();
     }
