@@ -227,7 +227,7 @@ async fn test_db_init_pool_reopens_existing_database() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(applied, 15);
+    assert_eq!(applied, 16);
 }
 
 #[tokio::test]

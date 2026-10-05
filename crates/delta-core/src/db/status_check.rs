@@ -66,12 +66,12 @@ pub async fn get_for_commit(
 }
 
 /// Check if all status checks for a commit have passed.
+/// Whether the commit has at least one status check and all of them
+/// succeeded. A commit without checks has not passed: requiring checks
+/// must not be satisfied by CI never reporting.
 pub async fn all_passed(pool: &SqlitePool, repo_id: &str, commit_sha: &str) -> Result<bool> {
     let checks = get_for_commit(pool, repo_id, commit_sha).await?;
-    if checks.is_empty() {
-        return Ok(true); // No checks = nothing to fail
-    }
-    Ok(checks.iter().all(|c| c.state == CheckState::Success))
+    Ok(!checks.is_empty() && checks.iter().all(|c| c.state == CheckState::Success))
 }
 
 #[derive(sqlx::FromRow)]

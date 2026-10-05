@@ -372,20 +372,45 @@ async fn merge_pull(
         return Err((StatusCode::CONFLICT, "pull request is not open".into()));
     }
 
-    // Check branch protection
-    if let Ok(Some(protection)) =
-        db::branch_protection::find_matching(&state.db, &repo_id, &pr.base_branch).await
-    {
-        // Check required approvals
+    let repo_path = state
+        .repo_host
+        .repo_path(&owner, &name)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    // Gate on, and then merge, the head branch's current tip. Checking the
+    // SHA recorded when the PR was opened would let unreviewed commits
+    // pushed later through the gate.
+    let head_sha =
+        delta_vcs::refs::ref_target(&repo_path, &format!("refs/heads/{}", pr.head_branch))
+            .ok_or_else(|| {
+                (
+                    StatusCode::CONFLICT,
+                    format!("head branch '{}' no longer exists", pr.head_branch),
+                )
+            })?;
+
+    // Check branch protection (fail closed if the rules can't be read)
+    let protection = db::branch_protection::find_matching(&state.db, &repo_id, &pr.base_branch)
+        .await
+        .map_err(|e| {
+            tracing::error!("failed to load branch protection: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            )
+        })?;
+    if let Some(protection) = protection {
+        // Check required approvals of the current head
         if protection.required_approvals > 0 {
-            let approvals = db::pull_request::count_approvals(&state.db, &pr.id.to_string())
-                .await
-                .unwrap_or(0);
+            let approvals =
+                db::pull_request::count_approvals(&state.db, &pr.id.to_string(), &head_sha)
+                    .await
+                    .unwrap_or(0);
             if approvals < protection.required_approvals {
                 return Err((
                     StatusCode::CONFLICT,
                     format!(
-                        "requires {} approval(s), has {}",
+                        "requires {} approval(s) of the current head, has {}",
                         protection.required_approvals, approvals
                     ),
                 ));
@@ -394,33 +419,19 @@ async fn merge_pull(
 
         // Check status checks
         if protection.require_status_checks {
-            match &pr.head_sha {
-                Some(sha) => {
-                    let passed = db::status_check::all_passed(&state.db, &repo_id, sha)
-                        .await
-                        .unwrap_or(false);
-                    if !passed {
-                        return Err((
-                            StatusCode::CONFLICT,
-                            "status checks have not all passed".into(),
-                        ));
-                    }
-                }
-                None => {
-                    return Err((
-                        StatusCode::CONFLICT,
-                        "cannot verify status checks: head SHA is unknown".into(),
-                    ));
-                }
+            let passed = db::status_check::all_passed(&state.db, &repo_id, &head_sha)
+                .await
+                .unwrap_or(false);
+            if !passed {
+                return Err((
+                    StatusCode::CONFLICT,
+                    "status checks have not all passed for the head commit".into(),
+                ));
             }
         }
     }
 
     // Execute the merge
-    let repo_path = state
-        .repo_host
-        .repo_path(&owner, &name)
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     let merge_mode = match req.strategy.as_str() {
         "squash" => delta_vcs::merge::MergeMode::Squash,
         "rebase" => delta_vcs::merge::MergeMode::Rebase,
@@ -440,10 +451,11 @@ async fn merge_pull(
         ));
     }
 
+    // Merge the exact commit that passed the checks above.
     let _merge_sha = delta_vcs::merge::execute_merge(
         &repo_path,
         &pr.base_branch,
-        &pr.head_branch,
+        &head_sha,
         merge_mode,
         &merge_message,
         &user.username,
@@ -765,12 +777,22 @@ async fn submit_review(
         _ => ReviewState::Commented,
     };
 
+    // Reviews apply to the head commit at the time of review.
+    let head_sha = state
+        .repo_host
+        .repo_path(&owner, &name)
+        .ok()
+        .and_then(|path| {
+            delta_vcs::refs::ref_target(&path, &format!("refs/heads/{}", pr.head_branch))
+        });
+
     let review = db::pull_request::submit_review(
         &state.db,
         &pr.id.to_string(),
         &user.id.to_string(),
         review_state,
         req.body.as_deref(),
+        head_sha.as_deref(),
     )
     .await
     .map_err(|e| {
