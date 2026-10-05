@@ -456,23 +456,21 @@ async fn trigger_pipeline(
     }
 
     let commit_sha = ws.head_commit.as_deref().unwrap_or(&ws.base_commit);
+    let repo_path = state
+        .repo_host
+        .repo_path(&owner, &name)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 
-    let run = db::pipeline::create_pipeline(
-        &state.db,
-        &repo.id.to_string(),
+    let run = crate::routes::pipelines::start_manual_pipeline(
+        &state,
+        &repo,
+        repo_path,
         &req.workflow_name,
         "workspace",
         Some(&ws.branch),
         commit_sha,
     )
-    .await
-    .map_err(|e| {
-        tracing::error!("failed to create pipeline: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal server error".into(),
-        )
-    })?;
+    .await?;
 
     Ok((StatusCode::CREATED, Json(run)))
 }

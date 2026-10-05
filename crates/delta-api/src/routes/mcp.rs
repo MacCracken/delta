@@ -773,16 +773,21 @@ async fn handle_workspace_trigger_pipeline(
     let ws = resolve_own_workspace(state, &user, &repo, ws_id, true).await?;
 
     let commit_sha = ws.head_commit.as_deref().unwrap_or(&ws.base_commit);
-    let run = db::pipeline::create_pipeline(
-        &state.db,
-        &repo.id.to_string(),
+    let repo_path = state
+        .repo_host
+        .repo_path(owner, name)
+        .map_err(|e| error_result(StatusCode::BAD_REQUEST, &e.to_string()))?;
+    let run = crate::routes::pipelines::start_manual_pipeline(
+        state,
+        &repo,
+        repo_path,
         workflow_name,
         "workspace",
         Some(&ws.branch),
         commit_sha,
     )
     .await
-    .map_err(|e| error_result(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|(status, message)| error_result(status, &message))?;
 
     ok_json(&serde_json::json!({
         "pipeline_id": run.id,

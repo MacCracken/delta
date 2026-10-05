@@ -537,7 +537,7 @@ async fn run_cleanup(
                 .config
                 .registry
                 .max_total_bytes_per_repo
-                .map(|b| b as i64),
+                .map(|b| i64::try_from(b).unwrap_or(i64::MAX)),
         ),
     };
 

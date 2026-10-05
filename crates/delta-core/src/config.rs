@@ -77,11 +77,12 @@ pub struct AuthConfig {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RegistryConfig {
-    /// Maximum age in days before artifacts are eligible for cleanup.
+    /// Maximum age in days before artifacts are eligible for cleanup
+    /// (unset or 0: no limit).
     pub max_artifact_age_days: Option<u32>,
-    /// Maximum number of artifacts per repository.
+    /// Maximum number of artifacts per repository (unset or 0: no limit).
     pub max_artifacts_per_repo: Option<u32>,
-    /// Maximum total artifact bytes per repository.
+    /// Maximum total artifact bytes per repository (unset or 0: no limit).
     pub max_total_bytes_per_repo: Option<u64>,
 }
 

@@ -104,13 +104,57 @@ async fn trigger_pipeline(
 ) -> Result<(StatusCode, Json<db::pipeline::PipelineRun>), (StatusCode, String)> {
     let (repo, owner_user) = resolve_repo_authed(&state, &owner, &name, &user).await?;
     require_role(&state, &repo, &owner_user, &user, CollaboratorRole::Write).await?;
-    let run = db::pipeline::create_pipeline(
-        &state.db,
-        &repo.id.to_string(),
+    if req.trigger_type.is_empty()
+        || req.trigger_type.len() > 32
+        || !req
+            .trigger_type
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return Err((StatusCode::BAD_REQUEST, "invalid trigger_type".into()));
+    }
+    let repo_path = state
+        .repo_host
+        .repo_path(&owner, &name)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    // Runs exactly the commit asked for (a commit id, branch or tag).
+    let commit_sha = delta_vcs::refs::resolve_commit(&repo_path, &req.commit_sha)
+        .await
+        .ok_or((StatusCode::BAD_REQUEST, "commit not found".to_string()))?;
+    let run = start_manual_pipeline(
+        &state,
+        &repo,
+        repo_path,
         &req.workflow_name,
         &req.trigger_type,
         req.trigger_ref.as_deref(),
-        &req.commit_sha,
+        &commit_sha,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(run)))
+}
+
+/// Create a queued run of `workflow_name` at `commit_sha` and start it in
+/// the background, in a checkout of that commit.
+pub(crate) async fn start_manual_pipeline(
+    state: &AppState,
+    repo: &delta_core::models::repo::Repository,
+    repo_path: std::path::PathBuf,
+    workflow_name: &str,
+    trigger_type: &str,
+    trigger_ref: Option<&str>,
+    commit_sha: &str,
+) -> Result<db::pipeline::PipelineRun, (StatusCode, String)> {
+    if workflow_name.is_empty() || workflow_name.len() > 255 {
+        return Err((StatusCode::BAD_REQUEST, "invalid workflow_name".into()));
+    }
+    let run = db::pipeline::create_pipeline(
+        &state.db,
+        &repo.id.to_string(),
+        workflow_name,
+        trigger_type,
+        trigger_ref,
+        commit_sha,
     )
     .await
     .map_err(|e| {
@@ -120,7 +164,40 @@ async fn trigger_pipeline(
             "internal server error".into(),
         )
     })?;
-    Ok((StatusCode::CREATED, Json(run)))
+
+    let state = state.clone();
+    let repo = repo.clone();
+    let pipeline_id = run.id.clone();
+    let workflow_name = workflow_name.to_string();
+    let trigger_type = trigger_type.to_string();
+    let trigger_ref = trigger_ref.map(str::to_string);
+    let commit_sha = commit_sha.to_string();
+    tokio::spawn(async move {
+        let target = crate::routes::git::PipelineTarget::Run {
+            pipeline_id: &pipeline_id,
+            workflow_name: &workflow_name,
+            trigger_type: &trigger_type,
+            trigger_ref: trigger_ref.as_deref(),
+        };
+        if let Err(e) = crate::routes::git::run_pipelines_at_commit(
+            &state,
+            &repo,
+            &repo_path,
+            &commit_sha,
+            target,
+        )
+        .await
+        {
+            tracing::warn!(pipeline_id, "pipeline could not start: {}", e);
+            let _ = db::pipeline::update_pipeline_status(
+                &state.db,
+                &pipeline_id,
+                db::pipeline::RunStatus::Failed,
+            )
+            .await;
+        }
+    });
+    Ok(run)
 }
 
 async fn get_pipeline(

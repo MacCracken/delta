@@ -533,13 +533,13 @@ async fn dispatch_push_events(
             continue;
         }
         let target = if let Some(branch) = update.refname.strip_prefix("refs/heads/") {
-            PushTarget::Branch(branch)
+            PipelineTarget::Branch(branch)
         } else if let Some(tag) = update.refname.strip_prefix("refs/tags/") {
-            PushTarget::Tag(tag)
+            PipelineTarget::Tag(tag)
         } else {
             continue;
         };
-        if let Err(e) = dispatch_push_pipelines(state, repo, repo_path, target, &update.new).await {
+        if let Err(e) = run_pipelines_at_commit(state, repo, repo_path, &update.new, target).await {
             tracing::warn!(refname = %update.refname, "pipeline dispatch failed: {}", e);
         }
     }
@@ -643,24 +643,29 @@ async fn dispatch_push_webhooks(
     Ok(())
 }
 
-/// What a push updated, for pipeline triggers.
-#[derive(Clone, Copy)]
-enum PushTarget<'a> {
+/// Which pipelines to run for a commit.
+pub(crate) enum PipelineTarget<'a> {
+    /// Workflows triggered by a push to this branch.
     Branch(&'a str),
+    /// Workflows triggered by this tag.
     Tag(&'a str),
+    /// An existing (queued) run of the named workflow, e.g. a manual one.
+    Run {
+        pipeline_id: &'a str,
+        workflow_name: &'a str,
+        trigger_type: &'a str,
+        trigger_ref: Option<&'a str>,
+    },
 }
 
-/// Trigger CI/CD pipelines for a pushed branch or tag at `commit_sha`.
-///
-/// Pipelines run in a temporary checkout of the commit: the hosted bare
-/// repository has no working tree, and build steps must never be able to
-/// write to it.
-async fn dispatch_push_pipelines(
+/// Run pipelines in a fresh checkout of `commit_sha` (never in the hosted
+/// repository itself), with the repository's secrets.
+pub(crate) async fn run_pipelines_at_commit(
     state: &AppState,
     repo: &Repository,
     repo_path: &std::path::Path,
-    target: PushTarget<'_>,
     commit_sha: &str,
+    target: PipelineTarget<'_>,
 ) -> std::result::Result<(), String> {
     let db = &state.db;
     let repo_id = repo.id.to_string();
@@ -698,8 +703,23 @@ async fn dispatch_push_pipelines(
         runners_enabled: ci_config.runner_token.is_some(),
     };
     match target {
-        PushTarget::Branch(branch) => delta_ci::runner::run_push_pipelines(&ctx, branch).await,
-        PushTarget::Tag(tag) => delta_ci::runner::run_tag_pipelines(&ctx, tag).await,
+        PipelineTarget::Branch(branch) => delta_ci::runner::run_push_pipelines(&ctx, branch).await,
+        PipelineTarget::Tag(tag) => delta_ci::runner::run_tag_pipelines(&ctx, tag).await,
+        PipelineTarget::Run {
+            pipeline_id,
+            workflow_name,
+            trigger_type,
+            trigger_ref,
+        } => {
+            delta_ci::runner::run_workflow(
+                &ctx,
+                pipeline_id,
+                workflow_name,
+                trigger_type,
+                trigger_ref,
+            )
+            .await
+        }
     }
     Ok(())
 }

@@ -15,6 +15,9 @@ pub struct CleanupReport {
 }
 
 /// Run cleanup for a single repo using its retention policy (or global config fallback).
+///
+/// A limit of zero or less means "no limit": read literally it would delete
+/// every artifact, which is never what a `0` in a config file means.
 pub async fn cleanup_repo(
     pool: &SqlitePool,
     blob_store: &BlobStore,
@@ -29,6 +32,9 @@ pub async fn cleanup_repo(
         excess_deleted: 0,
         oversize_deleted: 0,
     };
+    let max_age_days = max_age_days.filter(|&days| days > 0);
+    let max_count = max_count.filter(|&count| count > 0);
+    let max_total_bytes = max_total_bytes.filter(|&bytes| bytes > 0);
 
     // Age-based cleanup
     if let Some(days) = max_age_days {
@@ -61,4 +67,67 @@ pub async fn cleanup_repo(
     }
 
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_zero_limits_mean_no_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}", tmp.path().join("delta.db").display());
+        let pool = db::init_pool(&url).await.unwrap();
+        let store = BlobStore::new(tmp.path().join("blobs"));
+        let user = db::user::create(&pool, "alice", "a@example.com", "pw", false)
+            .await
+            .unwrap();
+        let repo = db::repo::create(
+            &pool,
+            &user.id.to_string(),
+            "r",
+            None,
+            delta_core::models::repo::Visibility::Public,
+        )
+        .await
+        .unwrap();
+        let repo_id = repo.id.to_string();
+        for (i, data) in [b"one".as_slice(), b"two".as_slice()]
+            .into_iter()
+            .enumerate()
+        {
+            let hash = store.store(data).unwrap();
+            db::artifact::create(
+                &pool,
+                &db::artifact::CreateArtifactParams {
+                    repo_id: &repo_id,
+                    pipeline_id: None,
+                    name: &format!("a{i}"),
+                    version: None,
+                    artifact_type: "generic",
+                    content_hash: &hash,
+                    size_bytes: 3,
+                    metadata: None,
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        let report = cleanup_repo(&pool, &store, &repo_id, Some(0), Some(0), Some(0))
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                report.expired_deleted,
+                report.excess_deleted,
+                report.oversize_deleted
+            ),
+            (0, 0, 0)
+        );
+        let report = cleanup_repo(&pool, &store, &repo_id, None, Some(1), None)
+            .await
+            .unwrap();
+        assert_eq!(report.excess_deleted, 1);
+    }
 }
