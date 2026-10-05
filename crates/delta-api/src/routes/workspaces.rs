@@ -624,35 +624,46 @@ pub async fn cleanup_expired_workspaces(
 ) {
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+        expire_workspaces(&db, &repo_host, &workspace_locks).await;
+    }
+}
 
-        let expired = match db::workspace::list_expired(&db).await {
-            Ok(ws) => ws,
-            Err(e) => {
-                tracing::error!("workspace cleanup: failed to list expired: {}", e);
-                continue;
-            }
-        };
-
-        for ws in expired {
-            tracing::info!(
-                workspace_id = %ws.id,
-                branch = %ws.branch,
-                "expiring workspace"
-            );
-
-            // Try to resolve repo for branch deletion
-            if let Ok(repo) = db::repo::get_by_id(&db, &ws.repo_id).await
-                && let Ok(repo_path) = repo_host.repo_path(&repo.owner, &repo.name)
-            {
-                let _ = delta_vcs::workspace::delete_workspace_branch(&repo_path, &ws.branch).await;
-                let _ = delta_vcs::workspace::prune_worktrees(&repo_path).await;
-            }
-
-            let _ = db::workspace::update_status(&db, &ws.id.to_string(), WorkspaceStatus::Expired)
-                .await;
-
-            // Clean up the per-workspace lock entry from the DashMap
-            workspace_locks.remove(&ws.id.to_string());
+/// Expire every active workspace past its TTL: delete its branch, prune
+/// its worktrees and mark it expired.
+pub async fn expire_workspaces(
+    db: &sqlx::SqlitePool,
+    repo_host: &delta_vcs::RepoHost,
+    workspace_locks: &WorkspaceLocks,
+) {
+    let expired = match db::workspace::list_expired(db).await {
+        Ok(ws) => ws,
+        Err(e) => {
+            tracing::error!("workspace cleanup: failed to list expired: {}", e);
+            return;
         }
+    };
+
+    for ws in expired {
+        tracing::info!(
+            workspace_id = %ws.id,
+            branch = %ws.branch,
+            "expiring workspace"
+        );
+
+        // Try to resolve repo for branch deletion. (`repo.owner` holds the
+        // owner's id; repositories live under the owner's username.)
+        if let Ok(repo) = db::repo::get_by_id(db, &ws.repo_id).await
+            && let Ok(owner) = db::user::get_by_id(db, &repo.owner).await
+            && let Ok(repo_path) = repo_host.repo_path(&owner.username, &repo.name)
+        {
+            let _ = delta_vcs::workspace::delete_workspace_branch(&repo_path, &ws.branch).await;
+            let _ = delta_vcs::workspace::prune_worktrees(&repo_path).await;
+        }
+
+        let _ =
+            db::workspace::update_status(db, &ws.id.to_string(), WorkspaceStatus::Expired).await;
+
+        // Clean up the per-workspace lock entry from the DashMap
+        workspace_locks.remove(&ws.id.to_string());
     }
 }

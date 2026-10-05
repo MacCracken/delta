@@ -127,9 +127,24 @@ async fn create_repo(
     .await
     .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
 
-    // Initialize bare git repo on disk
+    // Initialize bare git repo on disk. Without it the record is unusable,
+    // and an existing directory may hold another (deleted) repository's
+    // data, so roll back instead of carrying on.
     if let Err(e) = state.repo_host.init_bare(&user.username, &req.name) {
-        tracing::warn!("failed to init bare repo on disk: {}", e);
+        tracing::error!("failed to init bare repo on disk: {}", e);
+        if let Err(e) = db::repo::delete(&state.db, &repo.id.to_string()).await {
+            tracing::error!("failed to roll back repository record: {}", e);
+        }
+        return Err(match e {
+            delta_core::DeltaError::Conflict(_) => (
+                StatusCode::CONFLICT,
+                "repository data already exists on disk".into(),
+            ),
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to create repository storage".into(),
+            ),
+        });
     }
 
     // Audit: repo creation
@@ -278,6 +293,11 @@ async fn delete_repo(
     // Remove from disk
     if let Err(e) = state.repo_host.delete(&owner, &name) {
         tracing::warn!("failed to delete repo from disk: {}", e);
+    }
+
+    // The search index has no foreign key to cascade; purge its content.
+    if let Err(e) = db::search::remove_repo(&state.db, &repo.id.to_string()).await {
+        tracing::warn!("failed to purge search index: {}", e);
     }
 
     // Audit: repo deletion

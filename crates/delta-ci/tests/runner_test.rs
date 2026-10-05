@@ -83,11 +83,7 @@ async fn failed_jobs_block_their_dependents_only() {
     let jobs = db::pipeline::list_jobs(&pool, &pipelines[0].id)
         .await
         .unwrap();
-    let status = |name: &str| {
-        jobs.iter()
-            .find(|j| j.job_name == name)
-            .map(|j| j.status)
-    };
+    let status = |name: &str| jobs.iter().find(|j| j.job_name == name).map(|j| j.status);
     assert_eq!(status("build"), Some(db::pipeline::RunStatus::Failed));
     assert_eq!(status("deploy"), Some(db::pipeline::RunStatus::Failed));
     assert_eq!(status("lint"), Some(db::pipeline::RunStatus::Passed));

@@ -2,11 +2,16 @@
 
 #![allow(dead_code)]
 
+use std::path::Path;
+use std::process::{Command, Output};
+
 use delta_api::{routes, state::AppState};
 use delta_core::DeltaConfig;
 
 pub struct Server {
     pub base: String,
+    /// The state the server runs with (database, repository storage, ...).
+    pub state: AppState,
     _tmp: tempfile::TempDir,
 }
 
@@ -32,7 +37,8 @@ pub async fn start_server_with(configure: impl FnOnce(&mut DeltaConfig)) -> Serv
     let pool = delta_core::db::init_pool(&config.storage.db_url)
         .await
         .unwrap();
-    let app = routes::router(AppState::new(config, pool));
+    let state = AppState::new(config, pool);
+    let app = routes::router(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -45,8 +51,40 @@ pub async fn start_server_with(configure: impl FnOnce(&mut DeltaConfig)) -> Serv
     });
     Server {
         base: format!("http://{addr}"),
+        state,
         _tmp: tmp,
     }
+}
+
+/// Run git without prompting for credentials or reading user configuration.
+pub async fn git(dir: &Path, args: &[&str]) -> Output {
+    let dir = dir.to_path_buf();
+    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    tokio::task::spawn_blocking(move || {
+        Command::new("git")
+            .current_dir(dir)
+            .args(&args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com")
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap()
+}
+
+pub async fn git_ok(dir: &Path, args: &[&str]) {
+    let out = git(dir, args).await;
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 /// POST JSON as `token`; returns the response status and body.
