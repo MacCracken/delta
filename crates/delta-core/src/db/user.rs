@@ -15,9 +15,14 @@ pub async fn create(
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
 
-    sqlx::query(
+    // Usernames are unique regardless of case: "Alice" next to "alice" is
+    // an impersonation risk, and both would share one directory on
+    // case-insensitive filesystems. Checked in the INSERT itself so
+    // concurrent registrations can't race past it.
+    let inserted = sqlx::query(
         "INSERT INTO users (id, username, email, password_hash, is_agent, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+         SELECT ?, ?, ?, ?, ?, ?, ?
+         WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = ? COLLATE NOCASE)",
     )
     .bind(&id)
     .bind(username)
@@ -26,6 +31,7 @@ pub async fn create(
     .bind(is_agent)
     .bind(&now)
     .bind(&now)
+    .bind(username)
     .execute(pool)
     .await
     .map_err(|e| {
@@ -35,6 +41,12 @@ pub async fn create(
             DeltaError::Storage(e.to_string())
         }
     })?;
+    if inserted.rows_affected() == 0 {
+        return Err(DeltaError::Conflict(format!(
+            "user '{}' already exists",
+            username
+        )));
+    }
 
     get_by_id(pool, &id).await
 }

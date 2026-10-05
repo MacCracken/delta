@@ -20,6 +20,16 @@ async fn test_create_and_get_user() {
 }
 
 #[tokio::test]
+async fn test_usernames_are_unique_ignoring_case() {
+    let pool = common::setup_pool().await;
+    common::create_test_user(&pool).await; // "testuser"
+    let err = db::user::create(&pool, "TestUser", "other@example.com", "pw", false)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, delta_core::DeltaError::Conflict(_)), "{err}");
+}
+
+#[tokio::test]
 async fn test_get_user_by_username() {
     let pool = common::setup_pool().await;
     common::create_test_user(&pool).await;

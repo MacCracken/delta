@@ -94,7 +94,7 @@ impl AiClient {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let body = error_body(resp).await;
             return Err(DeltaError::Storage(format!(
                 "Anthropic API error {}: {}",
                 status, body
@@ -158,7 +158,7 @@ impl AiClient {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let body = error_body(resp).await;
             return Err(DeltaError::Storage(format!(
                 "OpenAI API error {}: {}",
                 status, body
@@ -233,7 +233,7 @@ impl AiClient {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let body = error_body(resp).await;
             return Err(DeltaError::Storage(format!(
                 "Hoosh API error {}: {}",
                 status, body
@@ -438,6 +438,22 @@ fn extract_json(content: &str) -> &str {
         return json.trim();
     }
     trimmed
+}
+
+/// The start of an error response body, for logs: provider errors can be
+/// large, and are never passed on to API clients.
+async fn error_body(mut resp: reqwest::Response) -> String {
+    const LIMIT: usize = 4096;
+    let mut body = Vec::new();
+    while body.len() < LIMIT {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                body.extend_from_slice(&chunk[..chunk.len().min(LIMIT - body.len())])
+            }
+            _ => break,
+        }
+    }
+    String::from_utf8_lossy(&body).into_owned()
 }
 
 #[cfg(test)]

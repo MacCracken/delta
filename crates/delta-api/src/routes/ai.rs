@@ -415,8 +415,8 @@ async fn ai_review_pr(
     let review = ai.review_diff(&diff, &context).await.map_err(|e| {
         tracing::error!("AI review failed: {}", e);
         (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("AI review failed: {}", e),
+            StatusCode::BAD_GATEWAY,
+            "AI review failed: the AI provider returned an error".into(),
         )
     })?;
 
@@ -440,7 +440,7 @@ async fn ai_review_pr(
                 .join("\n"),
         );
 
-        let _ = db::pull_request::add_comment(
+        match db::pull_request::add_comment(
             &state.db,
             &pr.id.to_string(),
             &user.id.to_string(),
@@ -449,8 +449,14 @@ async fn ai_review_pr(
             None,
             None,
         )
-        .await;
-        true
+        .await
+        {
+            Ok(_) => true,
+            Err(e) => {
+                tracing::error!("failed to post AI review comment: {}", e);
+                false
+            }
+        }
     } else {
         false
     };
@@ -488,8 +494,8 @@ async fn ai_describe_pr(
         .map_err(|e| {
             tracing::error!("AI PR description failed: {}", e);
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("AI PR description failed: {}", e),
+                StatusCode::BAD_GATEWAY,
+                "AI PR description failed: the AI provider returned an error".into(),
             )
         })?;
 
@@ -522,8 +528,8 @@ async fn ai_summarize_commit(
         .map_err(|e| {
             tracing::error!("AI commit summary failed: {}", e);
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("AI commit summary failed: {}", e),
+                StatusCode::BAD_GATEWAY,
+                "AI commit summary failed: the AI provider returned an error".into(),
             )
         })?;
 
@@ -628,8 +634,8 @@ async fn ai_query_repo(
     let answer = ai.query_repo(&req.question, &context).await.map_err(|e| {
         tracing::error!("AI query failed: {}", e);
         (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("AI query failed: {}", e),
+            StatusCode::BAD_GATEWAY,
+            "AI query failed: the AI provider returned an error".into(),
         )
     })?;
 

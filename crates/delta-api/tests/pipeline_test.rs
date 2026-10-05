@@ -109,3 +109,53 @@ async fn manual_and_workspace_triggers_run_the_workflow() {
     assert_eq!(run["status"], "passed", "{run}");
     assert_eq!(run["trigger_type"], "workspace");
 }
+
+#[tokio::test]
+async fn public_pipeline_logs_stream_without_credentials() {
+    let server = start_server().await;
+    let token = create_user_and_repo(&server, "pat", "open", "public").await;
+    let (status, _) = post(
+        &server,
+        &token,
+        "/repos",
+        json!({ "name": "closed", "visibility": "private" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    for repo in ["open", "closed"] {
+        let bare = server.state.repo_host.repo_path("pat", repo).unwrap();
+        let work = tempfile::tempdir().unwrap();
+        git_ok(work.path(), &["init", "-q", "-b", "main"]).await;
+        git_ok(work.path(), &["commit", "-q", "--allow-empty", "-m", "x"]).await;
+        git_ok(work.path(), &["push", "-q", bare.to_str().unwrap(), "main"]).await;
+    }
+
+    // What the web UI's pipeline page does: no token.
+    let handshake = |repo: &str, id: &str| {
+        reqwest::Client::new()
+            .get(format!(
+                "{}/api/v1/repos/pat/{repo}/pipelines/{id}/ws",
+                server.base
+            ))
+            .header("connection", "Upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .send()
+    };
+    for (repo, expected) in [
+        ("open", StatusCode::SWITCHING_PROTOCOLS),
+        ("closed", StatusCode::NOT_FOUND),
+    ] {
+        let (status, run) = post(
+            &server,
+            &token,
+            &format!("/repos/pat/{repo}/pipelines"),
+            json!({ "workflow_name": "none", "commit_sha": "main" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{run}");
+        let res = handshake(repo, run["id"].as_str().unwrap()).await.unwrap();
+        assert_eq!(res.status(), expected, "{repo}");
+    }
+}

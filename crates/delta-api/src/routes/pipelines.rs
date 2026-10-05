@@ -317,17 +317,18 @@ async fn stream_pipeline_logs(
     Query(query): Query<WsQuery>,
     ws: WebSocketUpgrade,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    // Authenticate via query param token (WebSocket can't send headers from browser)
-    let token = query.token.as_deref().ok_or((
-        StatusCode::UNAUTHORIZED,
-        "missing token query parameter".into(),
-    ))?;
-    let user = crate::auth::authenticate_token(&state.db, token)
-        .await
-        .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid or expired token".into()))?;
-
-    // Verify repo access
-    let (repo, _) = resolve_repo_authed(&state, &owner, &name, &user).await?;
+    // Browsers can't set headers on a WebSocket, so a token comes as a query
+    // parameter. Without one, only public repositories' pipelines stream:
+    // their logs are public on the web UI too.
+    let (repo, _) = match query.token.as_deref() {
+        Some(token) => {
+            let user = crate::auth::authenticate_token(&state.db, token)
+                .await
+                .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid or expired token".into()))?;
+            resolve_repo_authed(&state, &owner, &name, &user).await?
+        }
+        None => crate::helpers::resolve_repo(&state, &owner, &name).await?,
+    };
     let run = db::pipeline::get_pipeline(&state.db, &pipeline_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;

@@ -17,12 +17,17 @@ pub fn router() -> Router<AppState> {
     Router::new()
         // Repository browsing
         .route("/{owner}/{repo}", get(repo_root))
+        .route("/{owner}/{repo}/", get(repo_root))
         .route("/{owner}/{repo}/-/tree/{rev}", get(repo_tree_root))
+        // `{*path}` never matches an empty tail, so trailing slashes need
+        // routes of their own.
+        .route("/{owner}/{repo}/-/tree/{rev}/", get(repo_tree_root))
         .route("/{owner}/{repo}/-/tree/{rev}/{*path}", get(repo_tree))
         .route("/{owner}/{repo}/-/blob/{rev}/{*path}", get(repo_blob))
         .route("/{owner}/{repo}/-/raw/{rev}/{*path}", get(repo_raw))
         .route("/{owner}/{repo}/-/blame/{rev}/{*path}", get(repo_blame))
         .route("/{owner}/{repo}/-/commits/{rev}", get(repo_commits))
+        .route("/{owner}/{repo}/-/commits/{rev}/", get(repo_commits))
         .route(
             "/{owner}/{repo}/-/commits/{rev}/{*path}",
             get(repo_commits_path),
@@ -193,6 +198,22 @@ async fn repo_tree(
     render_tree(&state, &owner, &repo, &rev, &path).await
 }
 
+/// Split the `{rev}/{*path}` tail of a URL into a revision and a path.
+/// Branch and tag names may contain slashes (`feature/x`), so the longest
+/// leading part that names a branch or tag is the revision.
+fn split_rev_path(repo_path: &std::path::Path, rev: &str, path: &str) -> (String, String) {
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    for take in (1..=segments.len()).rev() {
+        let candidate = format!("{rev}/{}", segments[..take].join("/"));
+        if ["refs/heads/", "refs/tags/"].iter().any(|prefix| {
+            delta_vcs::refs::ref_target(repo_path, &format!("{prefix}{candidate}")).is_some()
+        }) {
+            return (candidate, segments[take..].join("/"));
+        }
+    }
+    (rev.to_string(), segments.join("/"))
+}
+
 async fn render_tree(
     state: &AppState,
     owner: &str,
@@ -201,6 +222,8 @@ async fn render_tree(
     path: &str,
 ) -> WebResult {
     let (repo_path, _repo_id) = resolve_repo_path(state, owner, repo).await?;
+    let (rev, path) = split_rev_path(&repo_path, rev, path);
+    let (rev, path) = (rev.as_str(), path.as_str());
 
     // Check if repo is empty
     let head = delta_vcs::refs::head_commit(&repo_path);
@@ -281,6 +304,7 @@ async fn repo_blob(
     Path((owner, repo, rev, path)): Path<(String, String, String, String)>,
 ) -> WebResult {
     let (repo_path, _) = resolve_repo_path(&state, &owner, &repo).await?;
+    let (rev, path) = split_rev_path(&repo_path, &rev, &path);
 
     let size = delta_vcs::browse::blob_size(&repo_path, &rev, &path)
         .await
@@ -332,6 +356,7 @@ async fn repo_raw(
     Path((owner, repo, rev, path)): Path<(String, String, String, String)>,
 ) -> WebResult {
     let (repo_path, _) = resolve_repo_path(&state, &owner, &repo).await?;
+    let (rev, path) = split_rev_path(&repo_path, &rev, &path);
 
     // Checks the path names a file; then stream it, whatever its size.
     delta_vcs::browse::blob_size(&repo_path, &rev, &path)
@@ -366,6 +391,7 @@ async fn repo_blame(
     Path((owner, repo, rev, path)): Path<(String, String, String, String)>,
 ) -> WebResult {
     let (repo_path, _) = resolve_repo_path(&state, &owner, &repo).await?;
+    let (rev, path) = split_rev_path(&repo_path, &rev, &path);
 
     let blame_lines =
         delta_vcs::browse::blame(&repo_path, &rev, &path, crate::helpers::MAX_TEXT_FILE_BYTES)
@@ -433,6 +459,8 @@ async fn render_commits(
     path: Option<&str>,
 ) -> WebResult {
     let (repo_path, _) = resolve_repo_path(state, owner, repo).await?;
+    let (rev, path) = split_rev_path(&repo_path, rev, path.unwrap_or(""));
+    let (rev, path) = (rev.as_str(), Some(path.as_str()).filter(|p| !p.is_empty()));
 
     let log_entries = delta_vcs::browse::log(&repo_path, rev, path, 100)
         .await
